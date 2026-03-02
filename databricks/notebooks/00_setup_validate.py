@@ -39,19 +39,12 @@ paths_to_check = [
     LOGS_PATH,
 ]
 
-print("Checking Volume paths...\n")
-all_ok = True
+print("Ensuring Volume paths exist...\n")
 for p in paths_to_check:
-    exists = os.path.exists(p)
-    status = "✓" if exists else "✗ MISSING"
-    if not exists:
-        all_ok = False
-    print(f"  {status}  {p}")
+    os.makedirs(p, exist_ok=True)
+    print(f"  ✓  {p}")
 
-if not all_ok:
-    print("\n⚠ Some paths are missing. Re-run the mkdirs cell in your setup notebook.")
-else:
-    print("\n✓ All Volume paths confirmed.")
+print("\n✓ All Volume paths confirmed.")
 
 # COMMAND ----------
 
@@ -61,15 +54,14 @@ else:
 
 try:
     api_key = get_api_key()
-    # Mask all but last 4 chars for display
     masked = "*" * (len(api_key) - 4) + api_key[-4:]
-    print(f"✓ Secret retrieved from scope='{SECRETS_SCOPE}', key='{SECRETS_KEY}': {masked}")
+    print(f"✓ API key found via MECATRAN_API_KEY env var: {masked}")
 except Exception as e:
-    print(f"✗ Could not retrieve secret: {e}")
+    print(f"✗ {e}")
     print("""
-To set up secrets, run in your local terminal:
-  databricks secrets create-scope --scope transit
-  databricks secrets put-secret --scope transit --key mecatran_api_key
+Add this to a cell above and re-run:
+  import os
+  os.environ["MECATRAN_API_KEY"] = "<your key>"
 """)
     raise
 
