@@ -1,0 +1,21 @@
+# Claude
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv/
+venv/
+
+# Secrets — never commit
+**/secrets.py
+**/*credentials*
+**/*api_key*
+
+# macOS
+.DS_Store
+
+# Databricks auto-generated
+.databricks/
