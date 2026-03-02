@@ -151,15 +151,17 @@ print(json.dumps(trip_linked[0], indent=2))
 
 # COMMAND ----------
 
-import urllib.request
 import zipfile
 import io
-import os
 
 static_zip_path = f"{RAW_STATIC_PATH}/googletransit.zip"
 
 print(f"Downloading GTFS static to {static_zip_path}...")
-urllib.request.urlretrieve(GTFS_STATIC_URL, static_zip_path)
+headers = {"User-Agent": "Mozilla/5.0 (compatible; transit-pipeline/1.0)"}
+resp = requests.get(GTFS_STATIC_URL, headers=headers, timeout=60)
+resp.raise_for_status()
+with open(static_zip_path, "wb") as f:
+    f.write(resp.content)
 print(f"✓ Downloaded. Size: {os.path.getsize(static_zip_path):,} bytes")
 
 with zipfile.ZipFile(static_zip_path, "r") as zf:

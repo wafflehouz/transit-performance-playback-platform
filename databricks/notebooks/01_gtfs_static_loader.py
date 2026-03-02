@@ -25,7 +25,7 @@
 
 # COMMAND ----------
 
-import urllib.request
+import requests
 import zipfile
 import io
 import os
@@ -49,7 +49,13 @@ print(f"GTFS Static Loader starting at {RUN_TS} UTC")
 static_zip_path = f"{RAW_STATIC_PATH}/googletransit.zip"
 
 print(f"Downloading GTFS static feed...")
-urllib.request.urlretrieve(GTFS_STATIC_URL, static_zip_path)
+headers = {"User-Agent": "Mozilla/5.0 (compatible; transit-pipeline/1.0)"}
+resp = requests.get(GTFS_STATIC_URL, headers=headers, timeout=60)
+resp.raise_for_status()
+
+with open(static_zip_path, "wb") as f:
+    f.write(resp.content)
+
 size_mb = os.path.getsize(static_zip_path) / (1024 * 1024)
 print(f"✓ Saved to {static_zip_path} ({size_mb:.1f} MB)")
 
