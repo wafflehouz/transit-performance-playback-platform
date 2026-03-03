@@ -56,25 +56,16 @@ GTFS_STATIC_URL = (
 )
 
 # ── API Key ───────────────────────────────────────────────────────────────────
-# Set MECATRAN_API_KEY as an environment variable on your job cluster:
-#   Workflow → Job → Edit → cluster → Advanced options → Environment variables
-#   MECATRAN_API_KEY=<your key>
-#
-# For interactive notebooks, you can also set it temporarily in a cell:
-#   import os; os.environ["MECATRAN_API_KEY"] = "<your key>"
-#   (do NOT commit that cell to git)
+# Secret stored in Databricks Secrets:
+#   scope: transit-api
+#   key:   MECATRAN_API_KEY
 
-import os
+SECRETS_SCOPE = "transit-api"
+SECRETS_KEY   = "MECATRAN_API_KEY"
 
 def get_api_key():
-    """Retrieve mecatran API key from cluster environment variable."""
-    key = os.environ.get("MECATRAN_API_KEY")
-    if not key:
-        raise ValueError(
-            "MECATRAN_API_KEY not set. Add it to your cluster's environment variables "
-            "via: Workflow → Job → cluster → Advanced options → Environment variables"
-        )
-    return key
+    """Retrieve mecatran API key from Databricks Secrets."""
+    return dbutils.secrets.get(scope=SECRETS_SCOPE, key=SECRETS_KEY)
 
 # ── Table Name Helpers ────────────────────────────────────────────────────────
 def tbl(name: str) -> str:
