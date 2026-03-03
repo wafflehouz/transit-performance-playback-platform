@@ -46,18 +46,66 @@ print(f"GTFS Static Loader starting at {RUN_TS} UTC")
 
 # COMMAND ----------
 
-static_zip_path = f"{RAW_STATIC_PATH}/googletransit.zip"
+import json
 
-print(f"Downloading GTFS static feed...")
-headers = {"User-Agent": "Mozilla/5.0 (compatible; transit-pipeline/1.0)"}
-resp = requests.get(GTFS_STATIC_URL, headers=headers, timeout=60)
-resp.raise_for_status()
+static_zip_path   = f"{RAW_STATIC_PATH}/googletransit.zip"
+feed_meta_path    = f"{RAW_STATIC_PATH}/feed_metadata.json"
+req_headers       = {"User-Agent": "Mozilla/5.0 (compatible; transit-pipeline/1.0)"}
 
-with open(static_zip_path, "wb") as f:
-    f.write(resp.content)
+FORCE_RELOAD = False  # set True to re-download regardless of cache headers
 
-size_mb = os.path.getsize(static_zip_path) / (1024 * 1024)
-print(f"✓ Saved to {static_zip_path} ({size_mb:.1f} MB)")
+def _remote_meta() -> dict:
+    """HEAD request to get cache headers from the feed server."""
+    try:
+        r = requests.head(GTFS_STATIC_URL, headers=req_headers, timeout=15, allow_redirects=True)
+        return {
+            "etag":           r.headers.get("ETag", ""),
+            "last_modified":  r.headers.get("Last-Modified", ""),
+            "content_length": r.headers.get("Content-Length", ""),
+        }
+    except Exception as e:
+        print(f"⚠ HEAD request failed ({e}) — will download unconditionally.")
+        return {}
+
+def _stored_meta() -> dict:
+    if os.path.exists(feed_meta_path):
+        with open(feed_meta_path) as f:
+            return json.load(f)
+    return {}
+
+def _save_meta(meta: dict):
+    with open(feed_meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+# ── Decide whether to download ────────────────────────────────────────────────
+remote = _remote_meta()
+stored = _stored_meta()
+zip_exists = os.path.exists(static_zip_path)
+
+needs_download = FORCE_RELOAD or not zip_exists
+if not needs_download and remote:
+    if remote.get("etag") and remote["etag"] != stored.get("etag"):
+        needs_download = True
+    elif remote.get("last_modified") and remote["last_modified"] != stored.get("last_modified"):
+        needs_download = True
+    elif not remote.get("etag") and not remote.get("last_modified"):
+        needs_download = True   # server provides no cache signal — always refresh
+
+if not needs_download:
+    print(f"✓ Feed unchanged — skipping download.")
+    print(f"  Last-Modified : {stored.get('last_modified') or 'n/a'}")
+    print(f"  ETag          : {stored.get('etag') or 'n/a'}")
+else:
+    print("Downloading GTFS static feed...")
+    resp = requests.get(GTFS_STATIC_URL, headers=req_headers, timeout=60)
+    resp.raise_for_status()
+    with open(static_zip_path, "wb") as f:
+        f.write(resp.content)
+    _save_meta(remote)
+    size_mb = os.path.getsize(static_zip_path) / (1024 * 1024)
+    print(f"✓ Downloaded ({size_mb:.1f} MB)")
+    print(f"  Last-Modified : {remote.get('last_modified') or 'n/a'}")
+    print(f"  ETag          : {remote.get('etag') or 'n/a'}")
 
 # COMMAND ----------
 
@@ -66,16 +114,18 @@ print(f"✓ Saved to {static_zip_path} ({size_mb:.1f} MB)")
 # COMMAND ----------
 
 extract_dir = f"{RAW_STATIC_PATH}/extracted"
-os.makedirs(extract_dir, exist_ok=True)
 
-with zipfile.ZipFile(static_zip_path, "r") as zf:
-    zf.extractall(extract_dir)
-    extracted = zf.namelist()
-
-print(f"Extracted {len(extracted)} files to {extract_dir}:")
-for f in sorted(extracted):
-    size = os.path.getsize(f"{extract_dir}/{f}")
-    print(f"  {f:35s}  {size:>10,} bytes")
+if needs_download or not os.path.exists(f"{extract_dir}/stops.txt"):
+    os.makedirs(extract_dir, exist_ok=True)
+    with zipfile.ZipFile(static_zip_path, "r") as zf:
+        zf.extractall(extract_dir)
+        extracted = zf.namelist()
+    print(f"✓ Extracted {len(extracted)} files to {extract_dir}:")
+    for f in sorted(extracted):
+        size = os.path.getsize(f"{extract_dir}/{f}")
+        print(f"  {f:35s}  {size:>10,} bytes")
+else:
+    print(f"✓ Using existing extracted files in {extract_dir}")
 
 # COMMAND ----------
 
@@ -239,10 +289,10 @@ fact_stop_schedule = (
         F.col("stop_sequence").cast(IntegerType()),
         F.col("arrival_time").cast(StringType()).alias("scheduled_arrival_time"),
         F.col("departure_time").cast(StringType()).alias("scheduled_departure_time"),
-        F.col("shape_dist_traveled").cast(DoubleType()),
-        F.col("timepoint").cast(IntegerType()),   # 1 = exact time, 0 = approximate
-        F.col("pickup_type").cast(IntegerType()),
-        F.col("drop_off_type").cast(IntegerType()),
+        safe_col(raw_stop_times, "shape_dist_traveled", DoubleType()),
+        safe_col(raw_stop_times, "timepoint",           IntegerType()),
+        safe_col(raw_stop_times, "pickup_type",         IntegerType()),
+        safe_col(raw_stop_times, "drop_off_type",       IntegerType()),
     )
     # Add seconds-since-midnight for schedule arithmetic in Gold
     .withColumn("scheduled_arrival_secs",   gtfs_time_udf(F.col("scheduled_arrival_time")))
