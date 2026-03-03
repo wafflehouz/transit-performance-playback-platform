@@ -130,9 +130,14 @@ def transform_vehicle_positions(df):
             F.col("vehicle.stopId").alias("stop_id"),
 
             # ── Derive service_date from vehicle-reported timestamp ──────────
-            # vehicle.timestamp is epoch seconds as a string
+            # vehicle.timestamp is epoch seconds (UTC). Convert to Phoenix local
+            # time (America/Phoenix = UTC-7, no DST) before extracting the date,
+            # so service_date matches the GTFS startDate used in TripUpdates.
             F.to_date(
-                F.from_unixtime(F.col("vehicle.timestamp").cast("long"))
+                F.from_utc_timestamp(
+                    F.from_unixtime(F.col("vehicle.timestamp").cast("long")),
+                    "America/Phoenix"
+                )
             ).alias("service_date"),
 
             F.to_timestamp(
