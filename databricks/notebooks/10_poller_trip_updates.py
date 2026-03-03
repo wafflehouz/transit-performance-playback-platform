@@ -89,33 +89,46 @@ def write_snapshot(data: dict, snapshot_ts: datetime) -> str:
 # COMMAND ----------
 
 # MAGIC %md ## Run
+# MAGIC
+# MAGIC Polls every `POLL_INTERVAL_SECONDS` for `MAX_RUNTIME_MINUTES` minutes then
+# MAGIC exits cleanly. Schedule this job hourly — it self-terminates before the next
+# MAGIC trigger so runs never overlap.
 
 # COMMAND ----------
 
-snapshot_ts = datetime.now(timezone.utc).replace(tzinfo=None)
-api_key     = get_api_key()
+import time
 
-print(f"[{snapshot_ts.isoformat()}] Polling TripUpdates...")
+MAX_RUNTIME_MINUTES = 55   # stop before next hourly trigger
+api_key    = get_api_key()
+start_time = time.time()
+run_count  = 0
 
-try:
-    data        = poll_trip_updates(api_key)
-    entity_cnt  = len([e for e in data.get("entity", []) if "tripUpdate" in e])
-    feed_ts_raw = data.get("header", {}).get("timestamp", "unknown")
+print(f"Poller starting — will run for {MAX_RUNTIME_MINUTES} min at {POLL_INTERVAL_SECONDS}s intervals\n")
 
-    file_path = write_snapshot(data, snapshot_ts)
+while (time.time() - start_time) < (MAX_RUNTIME_MINUTES * 60):
+    snapshot_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+    run_count  += 1
 
-    if file_path:
-        file_size = os.path.getsize(file_path)
-        print(f"✓ Wrote {entity_cnt} entities ({file_size:,} bytes)")
-        print(f"  feed_ts : {feed_ts_raw}")
-        print(f"  path    : {file_path}")
-    else:
-        print("  Nothing written.")
+    try:
+        data        = poll_trip_updates(api_key)
+        entity_cnt  = len([e for e in data.get("entity", []) if "tripUpdate" in e])
+        feed_ts_raw = data.get("header", {}).get("timestamp", "unknown")
+        file_path   = write_snapshot(data, snapshot_ts)
 
-except requests.exceptions.Timeout:
-    print("✗ Request timed out — will retry on next schedule.")
-except requests.exceptions.HTTPError as e:
-    print(f"✗ HTTP error: {e}")
-except Exception as e:
-    print(f"✗ Unexpected error: {e}")
-    raise
+        if file_path:
+            file_size = os.path.getsize(file_path)
+            print(f"[{snapshot_ts.strftime('%H:%M:%S')}] #{run_count:>3} ✓ {entity_cnt} entities ({file_size:,} bytes)")
+        else:
+            print(f"[{snapshot_ts.strftime('%H:%M:%S')}] #{run_count:>3} Nothing written.")
+
+    except requests.exceptions.Timeout:
+        print(f"[{snapshot_ts.strftime('%H:%M:%S')}] #{run_count:>3} ✗ Timeout — skipping.")
+    except requests.exceptions.HTTPError as e:
+        print(f"[{snapshot_ts.strftime('%H:%M:%S')}] #{run_count:>3} ✗ HTTP error: {e}")
+    except Exception as e:
+        print(f"[{snapshot_ts.strftime('%H:%M:%S')}] #{run_count:>3} ✗ Unexpected error: {e}")
+        raise
+
+    time.sleep(POLL_INTERVAL_SECONDS)
+
+print(f"\nPoller done — {run_count} snapshots written in {(time.time()-start_time)/60:.1f} min")
