@@ -99,8 +99,6 @@ raw_stream = (
     # Include file metadata (path, modification time) for lineage
     .option("cloudFiles.includeExistingFiles", "true")
     .load(TRIP_UPDATES_SNAPSHOTS_PATH)
-    # Attach source file path for lineage / debugging
-    .withColumn("_source_file", F.input_file_name())
 )
 
 # COMMAND ----------
@@ -126,7 +124,7 @@ def transform_trip_updates(df):
             # ── Ingestion metadata ──────────────────────────────────────────
             F.to_timestamp(F.col("feed_ts").cast("long")).alias("feed_ts"),
             F.to_timestamp(F.col("snapshot_ts")).alias("ingest_ts"),
-            F.input_file_name().alias("source_file"),
+            F.col("_metadata.file_path").alias("source_file"),
 
             # ── Trip context ────────────────────────────────────────────────
             F.to_date(

@@ -85,6 +85,7 @@ raw_stream = (
     .schema(file_schema)
     .option("cloudFiles.includeExistingFiles", "true")
     .load(VEHICLE_POSITIONS_SNAPSHOTS_PATH)
+    # Note: use _metadata.file_path (not input_file_name()) for Unity Catalog compatibility
 )
 
 # COMMAND ----------
@@ -108,7 +109,7 @@ def transform_vehicle_positions(df):
             # ── Ingestion metadata ──────────────────────────────────────────
             F.to_timestamp(F.col("feed_ts").cast("long")).alias("feed_ts"),
             F.to_timestamp(F.col("snapshot_ts")).alias("ingest_ts"),
-            F.input_file_name().alias("source_file"),
+            F.col("_metadata.file_path").alias("source_file"),
 
             # ── Vehicle / Trip context ──────────────────────────────────────
             F.col("vehicle.vehicle.id").alias("vehicle_id"),
