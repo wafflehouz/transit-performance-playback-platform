@@ -54,7 +54,7 @@ bronze_df = (
     .filter(F.col("service_date") == F.lit(target_date).cast("date"))
 )
 
-bronze_count = bronze_df.cache().count()
+bronze_count = bronze_df.count()
 print(f"Bronze rows for {target_date}: {bronze_count:,}")
 
 if bronze_count == 0:
