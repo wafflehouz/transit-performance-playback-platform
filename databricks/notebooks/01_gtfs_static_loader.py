@@ -83,6 +83,12 @@ for f in sorted(extracted):
 
 # COMMAND ----------
 
+# Helper: return a column expression only if it exists in df, else null of given type
+def safe_col(df, col_name: str, cast_type):
+    if col_name in df.columns:
+        return F.col(col_name).cast(cast_type).alias(col_name)
+    return F.lit(None).cast(cast_type).alias(col_name)
+
 # Helper: read a GTFS CSV file as a Spark DataFrame
 def read_gtfs_csv(filename: str, schema=None):
     path = f"{extract_dir}/{filename}"
@@ -146,9 +152,9 @@ dim_stop = (
         F.col("stop_name").cast(StringType()),
         F.col("stop_lat").cast(DoubleType()).alias("lat"),
         F.col("stop_lon").cast(DoubleType()).alias("lon"),
-        F.col("parent_station").cast(StringType()),
-        F.col("location_type").cast(IntegerType()),
-        F.col("wheelchair_boarding").cast(IntegerType()),
+        safe_col(raw_stops, "parent_station",      StringType()),
+        safe_col(raw_stops, "location_type",       IntegerType()),
+        safe_col(raw_stops, "wheelchair_boarding",  IntegerType()),
     )
     .dropDuplicates(["stop_id"])
     .withColumn("loaded_ts", F.lit(RUN_TS))
@@ -175,13 +181,13 @@ dim_trip = (
         F.col("trip_id").cast(StringType()),
         F.col("route_id").cast(StringType()),
         F.col("service_id").cast(StringType()),
-        F.col("direction_id").cast(IntegerType()),
-        F.col("shape_id").cast(StringType()),
-        F.col("trip_headsign").cast(StringType()),
-        F.col("trip_short_name").cast(StringType()),
-        F.col("block_id").cast(StringType()),
-        F.col("wheelchair_accessible").cast(IntegerType()),
-        F.col("bikes_allowed").cast(IntegerType()),
+        safe_col(raw_trips, "direction_id",         IntegerType()),
+        safe_col(raw_trips, "shape_id",             StringType()),
+        safe_col(raw_trips, "trip_headsign",        StringType()),
+        safe_col(raw_trips, "trip_short_name",      StringType()),
+        safe_col(raw_trips, "block_id",             StringType()),
+        safe_col(raw_trips, "wheelchair_accessible", IntegerType()),
+        safe_col(raw_trips, "bikes_allowed",        IntegerType()),
     )
     .dropDuplicates(["trip_id"])
     .withColumn("loaded_ts", F.lit(RUN_TS))
