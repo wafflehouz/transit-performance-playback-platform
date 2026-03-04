@@ -86,6 +86,11 @@ vp = (
 
 vp_confirmed = vp.join(confirmed_trips, on="trip_id", how="left_semi")
 
+# Filter out GPS outliers. Phoenix speed limit is 35 mph (15.6 m/s).
+# Anything above 20 m/s (~45 mph) is erroneous GPS data and would cause
+# vehicles to appear to teleport on the playback map.
+vp_confirmed = vp_confirmed.filter(F.col("speed_mps") <= 20.0)
+
 vp_count = vp_confirmed.count()
 print(f"VP rows for confirmed trips: {vp_count:,}")
 
