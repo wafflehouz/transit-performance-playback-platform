@@ -29,6 +29,10 @@
 
 # COMMAND ----------
 
+spark.conf.set("spark.sql.session.timeZone", "UTC")
+
+# COMMAND ----------
+
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType, ArrayType, MapType
