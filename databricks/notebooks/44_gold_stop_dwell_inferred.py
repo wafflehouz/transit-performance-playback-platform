@@ -95,7 +95,11 @@ stop_schedule = (
 
 stop_dim = (
     spark.table(SILVER_DIM_STOP)
-    .select("stop_id", "stop_lat", "stop_lon")
+    .select(
+        "stop_id",
+        F.col("lat").alias("stop_lat"),
+        F.col("lon").alias("stop_lon"),
+    )
 )
 
 # COMMAND ----------
@@ -258,7 +262,7 @@ print("Route 29 — 35th Ave area (stop proximity check):")
     written
     .filter(F.col("route_id") == "29")
     .join(
-        spark.table(SILVER_DIM_STOP).select("stop_id", "stop_name"),
+        spark.table(SILVER_DIM_STOP).select("stop_id", F.col("stop_name")),
         on="stop_id", how="left"
     )
     .filter(F.col("stop_name").contains("35"))
