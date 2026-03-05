@@ -96,14 +96,17 @@ GOLD_ROUTE_METRICS_BASELINE   = tbl("gold_route_metrics_baseline")
 GOLD_ROUTE_SEGMENT_CONGESTION = tbl("gold_route_segment_congestion")
 GOLD_ANOMALY_EVENTS           = tbl("gold_anomaly_events")
 GOLD_INCIDENT_REPORTS         = tbl("gold_incident_reports")
+GOLD_STOP_DWELL_INFERRED      = tbl("gold_stop_dwell_inferred")
 
 # ── Pipeline Constants ────────────────────────────────────────────────────────
 BRONZE_RETENTION_DAYS = 30     # drop Bronze partitions older than this
 SILVER_RETENTION_DAYS = 365
 GOLD_RETENTION_DAYS   = 365
 
-POLL_INTERVAL_SECONDS = 60     # target cadence for pollers
-VP_DOWNSAMPLE_SECONDS = 30     # keep at most 1 VP row per vehicle per this window
+POLL_INTERVAL_SECONDS       = 60    # target cadence for pollers
+VP_DOWNSAMPLE_SECONDS       = 30    # keep at most 1 VP row per vehicle per this window
+VP_STOP_RADIUS_METERS       = 40    # haversine radius to match VP point to a stop
+VP_STATIONARY_THRESHOLD_MPS = 1.0   # speed below this = vehicle considered stationary
 
 print(f"Config loaded — catalog={CATALOG}, schema={SCHEMA}")
 print(f"Base path: {BASE_PATH}")
