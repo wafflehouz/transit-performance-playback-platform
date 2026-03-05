@@ -98,7 +98,7 @@ def write_snapshot(data: dict, snapshot_ts: datetime) -> str:
 
 import time
 
-MAX_RUNTIME_MINUTES = 55   # stop before next hourly trigger
+MAX_RUNTIME_MINUTES = 58   # 58 min: leaves ~2 min gap for job startup on the next trigger
 api_key    = get_api_key()
 start_time = time.time()
 run_count  = 0
@@ -129,6 +129,10 @@ while (time.time() - start_time) < (MAX_RUNTIME_MINUTES * 60):
         print(f"[{snapshot_ts.strftime('%H:%M:%S')}] #{run_count:>3} ✗ Unexpected error: {e}")
         raise
 
-    time.sleep(POLL_INTERVAL_SECONDS)
+    # Skip the final sleep if the next wake-up would fall outside the run window —
+    # avoids a wasted 60s wait after the last poll before the loop condition is checked.
+    elapsed = time.time() - start_time
+    if elapsed + POLL_INTERVAL_SECONDS < MAX_RUNTIME_MINUTES * 60:
+        time.sleep(POLL_INTERVAL_SECONDS)
 
 print(f"\nPoller done — {run_count} snapshots written in {(time.time()-start_time)/60:.1f} min")
