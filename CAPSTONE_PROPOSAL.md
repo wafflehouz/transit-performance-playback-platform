@@ -10,7 +10,9 @@
 
 Valley Metro (Phoenix) operates over 100 bus routes serving a metro area of 5 million people. Planners currently rely on a commercial CAD/AVL vendor (Clever Devices) for performance data, but that system delivers batch exports, not near-real-time insight. When a route degrades — buses running 6+ minutes late, stops being skipped, dwell time spiking — planners learn about it hours or days after the fact.
 
-This project builds a **planner-facing performance intelligence platform** that ingests live GTFS-RT feeds, constructs a historical analytics foundation, detects anomalies in near-real-time, and uses generative AI to surface actionable incident briefs — turning raw telemetry into decisions.
+This project builds a **planner-facing performance intelligence platform** that ingests live GTFS-RT feeds, constructs a historical analytics foundation, detects anomalies each morning before service begins, and uses generative AI to surface actionable incident briefs — turning raw telemetry into decisions.
+
+> **Latency posture (MVP):** nightly Gold jobs complete by ~5 AM, giving planners anomaly briefs before the first peak-hour pull-out. A roadmap item promotes route metrics and anomaly detection to a 5-minute micro-batch job over Silver tables, enabling same-day degradation awareness.
 
 ---
 
@@ -203,5 +205,10 @@ The gap in dwell (our 71–98 s vs CAD/AVL 120–240 s) is explained by methodol
 | 4 — Anomaly | 45, 46 | ✅ Complete, pending 7-day data accumulation |
 | 5 — AI briefs | 47 | 🔲 Next |
 | 6 — UI | Next.js app | 🔲 Planned |
+| 7 — Streaming upgrade | 42s, 46s | 🔲 Roadmap |
 
 Live pipeline has been collecting Valley Metro data since early March 2026. Gold tables currently hold validated data for multiple service dates.
+
+### Roadmap: Streaming Upgrade (Phase 7)
+
+Promote `route_metrics_15min` and `anomaly_events` from nightly batch to a 5-minute micro-batch job reading incrementally from Silver tables. This closes the near-real-time gap and enables a "today so far" view in the UI. Prerequisite: Silver VP and TU jobs must also be promoted to trigger-based incremental writes. Estimated effort: 1 week. Deferred until MVP is validated in production.

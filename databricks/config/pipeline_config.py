@@ -99,7 +99,7 @@ GOLD_INCIDENT_REPORTS         = tbl("gold_incident_reports")
 GOLD_STOP_DWELL_INFERRED      = tbl("gold_stop_dwell_inferred")
 
 # ── Pipeline Constants ────────────────────────────────────────────────────────
-BRONZE_RETENTION_DAYS = 30     # drop Bronze partitions older than this
+BRONZE_RETENTION_DAYS = 90     # 90 days: covers 28-day baseline window with margin for gold rebuilds
 SILVER_RETENTION_DAYS = 365
 GOLD_RETENTION_DAYS   = 365
 

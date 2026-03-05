@@ -96,10 +96,15 @@ enriched = (
 
 # COMMAND ----------
 
-# MAGIC %md ## Step 3 — Aggregate to Baseline Grain
+# MAGIC %md ## Step 3 — Winsorize, then Aggregate to Baseline Grain
 # MAGIC
-# MAGIC `sample_days` = number of historical dates that contributed to this slot.
-# MAGIC Slots with fewer than 3 samples are excluded — too few to anchor a meaningful baseline.
+# MAGIC **Winsorization:** clip `avg_delay_seconds` to the 5th–95th percentile range
+# MAGIC before aggregation. This prevents detour days, special events, or data quality
+# MAGIC outliers from anchoring the baseline in an unrepresentative position.
+# MAGIC
+# MAGIC **Minimum sample guard:** require `sample_days >= 5` per slot. With a 28-day
+# MAGIC window this gives at most 20 weekday samples and 4 weekend samples; requiring 5
+# MAGIC ensures at least one full week of weekday evidence or two full weekends.
 # MAGIC
 # MAGIC Deviation bands mirror the CAD/AVL runtime analysis tool's classification:
 # MAGIC | Band        | Seconds   | Operational meaning |
@@ -111,39 +116,64 @@ enriched = (
 
 # COMMAND ----------
 
-baseline = (
+# Compute per-slot winsorization bounds (p5 / p95) then clip before aggregation.
+# Using a self-join on the group keys keeps this in a single Spark pass.
+from pyspark.sql import Window
+
+w_slot = Window.partitionBy("route_id", "direction_id", "service_type", "bucket_hour", "bucket_minute")
+
+enriched_w = (
     enriched
+    .withColumn(
+        "p05_delay",
+        F.percentile_approx("avg_delay_seconds", 0.05, accuracy=100).over(w_slot)
+    )
+    .withColumn(
+        "p95_delay",
+        F.percentile_approx("avg_delay_seconds", 0.95, accuracy=100).over(w_slot)
+    )
+    .withColumn(
+        "delay_winsorized",
+        F.greatest(
+            F.col("p05_delay"),
+            F.least(F.col("p95_delay"), F.col("avg_delay_seconds"))
+        )
+    )
+)
+
+baseline = (
+    enriched_w
     .groupBy("route_id", "direction_id", "service_type", "bucket_hour", "bucket_minute")
     .agg(
         F.count("*").cast("int").alias("sample_days"),
         F.min("service_date").alias("baseline_start_date"),
         F.max("service_date").alias("baseline_end_date"),
 
-        F.avg("avg_delay_seconds").alias("baseline_avg_delay_seconds"),
-        F.stddev("avg_delay_seconds").alias("baseline_stddev_delay_seconds"),
-        F.percentile_approx("avg_delay_seconds", 0.5, accuracy=100)
+        F.avg("delay_winsorized").alias("baseline_avg_delay_seconds"),
+        F.stddev("delay_winsorized").alias("baseline_stddev_delay_seconds"),
+        F.percentile_approx("delay_winsorized", 0.5, accuracy=100)
             .cast("double").alias("baseline_p50_delay_seconds"),
-        F.percentile_approx("avg_delay_seconds", 0.9, accuracy=100)
+        F.percentile_approx("delay_winsorized", 0.9, accuracy=100)
             .cast("double").alias("baseline_p90_delay_seconds"),
 
         F.avg("pct_on_time").alias("baseline_avg_pct_on_time"),
         F.avg("trip_count").alias("baseline_avg_trip_count"),
 
-        # Deviation band frequencies
+        # Deviation band frequencies (on winsorized delay)
         F.avg(
-            F.when(F.col("avg_delay_seconds") < 60,   F.lit(1.0)).otherwise(F.lit(0.0))
+            F.when(F.col("delay_winsorized") < 60,   F.lit(1.0)).otherwise(F.lit(0.0))
         ).alias("baseline_pct_lt1min"),
         F.avg(
-            F.when(F.col("avg_delay_seconds").between(60, 179),  F.lit(1.0)).otherwise(F.lit(0.0))
+            F.when(F.col("delay_winsorized").between(60, 179),  F.lit(1.0)).otherwise(F.lit(0.0))
         ).alias("baseline_pct_1to3min"),
         F.avg(
-            F.when(F.col("avg_delay_seconds").between(180, 359), F.lit(1.0)).otherwise(F.lit(0.0))
+            F.when(F.col("delay_winsorized").between(180, 359), F.lit(1.0)).otherwise(F.lit(0.0))
         ).alias("baseline_pct_3to6min"),
         F.avg(
-            F.when(F.col("avg_delay_seconds") >= 360, F.lit(1.0)).otherwise(F.lit(0.0))
+            F.when(F.col("delay_winsorized") >= 360, F.lit(1.0)).otherwise(F.lit(0.0))
         ).alias("baseline_pct_gt6min"),
     )
-    .filter(F.col("sample_days") >= 3)
+    .filter(F.col("sample_days") >= 5)
 )
 
 # COMMAND ----------
