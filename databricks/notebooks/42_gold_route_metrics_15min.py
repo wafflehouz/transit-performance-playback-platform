@@ -110,6 +110,14 @@ metrics = (
         F.avg("trip_avg_dwell_delta").alias("avg_dwell_delta_seconds"),
 
         F.avg("late_start_seconds").alias("avg_late_start_seconds"),
+
+        # OTP: fraction of trips within FTA standard window (-60s early to +299s late)
+        # NULL total_trip_delay_seconds rows are excluded from avg automatically.
+        F.avg(
+            F.when(
+                F.col("total_trip_delay_seconds").between(-60, 299), F.lit(1)
+            ).otherwise(F.lit(0))
+        ).alias("pct_on_time"),
     )
 )
 
@@ -129,7 +137,8 @@ spark.sql(f"""
         avg_delay_seconds         DOUBLE,
         p90_delay_seconds         DOUBLE,
         avg_dwell_delta_seconds   DOUBLE,
-        avg_late_start_seconds    DOUBLE
+        avg_late_start_seconds    DOUBLE,
+        pct_on_time               DOUBLE
     )
     USING DELTA
     PARTITIONED BY (service_date)
@@ -138,6 +147,13 @@ spark.sql(f"""
         'delta.autoOptimize.autoCompact'   = 'true'
     )
 """)
+
+# Add pct_on_time column to existing table if not already present.
+try:
+    spark.sql(f"ALTER TABLE {GOLD_ROUTE_METRICS_15MIN} ADD COLUMN pct_on_time DOUBLE")
+    print("Added pct_on_time column to existing table.")
+except Exception:
+    pass  # column already exists
 
 (
     metrics
