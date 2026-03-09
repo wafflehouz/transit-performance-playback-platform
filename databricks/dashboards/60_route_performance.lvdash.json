@@ -18,7 +18,7 @@
     {
       "name": "ds_worst_routes",
       "displayName": "Bottom 20 Routes by OTP (last 7 days)",
-      "query": "SELECT\n  route_id,\n  direction_id,\n  ROUND(AVG(pct_on_time) * 100, 1)              AS avg_otp_pct,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)       AS avg_delay_min,\n  ROUND(AVG(avg_late_start_seconds) / 60.0, 2)  AS avg_late_start_min,\n  SUM(trip_count)                               AS total_trips\nFROM tabular.dataexpert.gold_route_metrics_15min\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY route_id, direction_id\nHAVING total_trips >= 10\nORDER BY avg_otp_pct ASC\nLIMIT 20"
+      "query": "SELECT\n  route_id,\n  ROUND(AVG(pct_on_time) * 100, 1)              AS avg_otp_pct,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)       AS avg_delay_min,\n  ROUND(AVG(avg_late_start_seconds) / 60.0, 2)  AS avg_late_start_min,\n  SUM(trip_count)                               AS total_trips\nFROM tabular.dataexpert.gold_route_metrics_15min\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY route_id\nHAVING total_trips >= 10\nORDER BY avg_otp_pct ASC\nLIMIT 20"
     },
     {
       "name": "ds_delay_heatmap",
