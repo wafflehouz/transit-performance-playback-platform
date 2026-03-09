@@ -159,7 +159,7 @@ worst_buckets_df = (
         F.round("delay_z_score",             2).alias("z_score"),
         F.round("otp_drop_pp",               1).alias("otp_drop_pp"),
     )
-    .orderBy(F.desc("z_score").nulls_last())
+    .orderBy(F.col("z_score").desc_nulls_last())
     .limit(5)
 )
 
