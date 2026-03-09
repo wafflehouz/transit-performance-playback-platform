@@ -1,0 +1,132 @@
+{
+  "datasets": [
+    {
+      "name": "ds_active_anomalies",
+      "displayName": "Active Anomaly Events",
+      "query": "SELECT\n  service_date,\n  route_id,\n  direction_id,\n  -- Convert UTC bucket to Phoenix local\n  DATE_FORMAT(\n    TIMESTAMPADD(HOUR, -7, time_bucket_15min),\n    'HH:mm'\n  )                                                    AS bucket_time_phoenix,\n  severity,\n  trigger_flags,\n  ROUND(avg_delay_seconds / 60.0, 2)                   AS avg_delay_min,\n  ROUND(z_score, 2)                                    AS z_score,\n  ROUND(otp_drop_pp * 100, 1)                          AS otp_drop_pp,\n  ROUND(delay_vs_baseline_seconds / 60.0, 2)           AS vs_baseline_min\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nORDER BY service_date DESC, severity DESC, avg_delay_seconds DESC"
+    },
+    {
+      "name": "ds_anomaly_counts",
+      "displayName": "Daily Anomaly Counts by Severity",
+      "query": "SELECT\n  service_date,\n  severity,\n  COUNT(*)                                             AS event_count,\n  COUNT(DISTINCT route_id)                             AS routes_affected\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY service_date, severity\nORDER BY service_date, severity"
+    },
+    {
+      "name": "ds_top_offender_routes",
+      "displayName": "Routes with Most Anomalies (30 Days)",
+      "query": "SELECT\n  route_id,\n  severity,\n  COUNT(*)                                             AS anomaly_count,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)             AS avg_delay_min,\n  ROUND(AVG(z_score), 2)                               AS avg_z_score\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY route_id, severity\nORDER BY anomaly_count DESC\nLIMIT 30"
+    },
+    {
+      "name": "ds_anomaly_by_hour",
+      "displayName": "Anomaly Events by Hour of Day",
+      "query": "SELECT\n  MOD(HOUR(time_bucket_15min) - 7 + 24, 24)            AS phoenix_hour,\n  severity,\n  COUNT(*)                                             AS event_count\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY MOD(HOUR(time_bucket_15min) - 7 + 24, 24), severity\nORDER BY phoenix_hour, severity"
+    },
+    {
+      "name": "ds_otp_drop_routes",
+      "displayName": "Routes with OTP Drop Triggers",
+      "query": "SELECT\n  route_id,\n  service_date,\n  ROUND(otp_drop_pp * 100, 1)                          AS otp_drop_pp,\n  severity,\n  trigger_flags\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND ARRAY_CONTAINS(trigger_flags, 'otp_drop')\nORDER BY otp_drop_pp DESC\nLIMIT 50"
+    }
+  ],
+  "pages": [
+    {
+      "name": "pg_anomaly_overview",
+      "displayName": "Anomaly Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_anomaly_header",
+            "textbox_spec": "## Service Anomaly Monitor\nCritical = delay ≥6 min AND >2σ above baseline, OR OTP dropped ≥25 pp. Warning = ≥3 min AND >1.5σ, OR OTP dropped ≥15 pp."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "viz_anomaly_trend",
+            "viz_spec": {
+              "type": "bar",
+              "dataset": "ds_anomaly_counts",
+              "x_axis": { "field": "service_date" },
+              "y_axis": [{ "field": "event_count", "label": "Anomaly Events" }],
+              "series": { "field": "severity" },
+              "title": "Daily Anomaly Events — Last 30 Days (stacked by severity)"
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 4, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "viz_anomaly_by_hour",
+            "viz_spec": {
+              "type": "bar",
+              "dataset": "ds_anomaly_by_hour",
+              "x_axis": { "field": "phoenix_hour", "label": "Hour (Phoenix)" },
+              "y_axis": [{ "field": "event_count", "label": "Event Count" }],
+              "series": { "field": "severity" },
+              "title": "Anomaly Events by Hour of Day"
+            }
+          },
+          "position": { "x": 4, "y": 2, "width": 2, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "viz_top_offenders",
+            "viz_spec": {
+              "type": "bar",
+              "dataset": "ds_top_offender_routes",
+              "x_axis": { "field": "route_id" },
+              "y_axis": [{ "field": "anomaly_count", "label": "Anomaly Count" }],
+              "series": { "field": "severity" },
+              "title": "Top Offender Routes — Last 30 Days"
+            }
+          },
+          "position": { "x": 0, "y": 7, "width": 3, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "viz_top_offenders_table",
+            "viz_spec": {
+              "type": "table",
+              "dataset": "ds_top_offender_routes",
+              "title": "Top Offender Routes — Detail"
+            }
+          },
+          "position": { "x": 3, "y": 7, "width": 3, "height": 5 }
+        }
+      ]
+    },
+    {
+      "name": "pg_anomaly_events",
+      "displayName": "Event Feed",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_events_header",
+            "textbox_spec": "## Live Anomaly Event Feed\nLast 7 days. Severity: critical (red) > warning (yellow). Sort by delay or z-score to find worst violations."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "viz_events_table",
+            "viz_spec": {
+              "type": "table",
+              "dataset": "ds_active_anomalies",
+              "title": "Anomaly Events — Last 7 Days"
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 6, "height": 10 }
+        },
+        {
+          "widget": {
+            "name": "viz_otp_drop_table",
+            "viz_spec": {
+              "type": "table",
+              "dataset": "ds_otp_drop_routes",
+              "title": "OTP Drop Triggers — Last 7 Days"
+            }
+          },
+          "position": { "x": 0, "y": 12, "width": 6, "height": 6 }
+        }
+      ]
+    }
+  ]
+}

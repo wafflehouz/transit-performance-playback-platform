@@ -1,0 +1,128 @@
+{
+  "datasets": [
+    {
+      "name": "ds_stop_dwell_summary",
+      "displayName": "Stop Dwell Summary (Scheduled vs Actual)",
+      "query": "SELECT\n  stop_id,\n  route_id,\n  direction_id,\n  COUNT(*)                                             AS observation_count,\n  ROUND(AVG(scheduled_dwell_seconds), 1)               AS avg_scheduled_sec,\n  ROUND(AVG(actual_dwell_seconds), 1)                  AS avg_actual_sec,\n  ROUND(AVG(dwell_delta_seconds), 1)                   AS avg_delta_sec,\n  ROUND(PERCENTILE_APPROX(dwell_delta_seconds, 0.9), 1) AS p90_delta_sec,\n  ROUND(PERCENTILE_APPROX(actual_dwell_seconds, 0.5), 1) AS p50_actual_sec,\n  ROUND(PERCENTILE_APPROX(actual_dwell_seconds, 0.9), 1) AS p90_actual_sec\nFROM tabular.dataexpert.gold_stop_dwell_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND actual_dwell_seconds IS NOT NULL\nGROUP BY stop_id, route_id, direction_id\nHAVING observation_count >= 5\nORDER BY avg_delta_sec DESC\nLIMIT 100"
+    },
+    {
+      "name": "ds_top_dwell_stops",
+      "displayName": "Top 30 Stops by Dwell Inflation",
+      "query": "SELECT\n  stop_id,\n  route_id,\n  ROUND(AVG(dwell_delta_seconds), 1)                   AS avg_dwell_delta_sec,\n  ROUND(PERCENTILE_APPROX(actual_dwell_seconds, 0.9), 1) AS p90_actual_sec,\n  COUNT(*)                                             AS observations\nFROM tabular.dataexpert.gold_stop_dwell_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND actual_dwell_seconds IS NOT NULL\n  AND dwell_delta_seconds IS NOT NULL\nGROUP BY stop_id, route_id\nHAVING observations >= 5\nORDER BY avg_dwell_delta_sec DESC\nLIMIT 30"
+    },
+    {
+      "name": "ds_inferred_dwell_summary",
+      "displayName": "VP-Inferred Dwell by Stop (Last 7 Days)",
+      "query": "SELECT\n  stop_id,\n  route_id,\n  COUNT(DISTINCT service_date)                         AS days_observed,\n  COUNT(*)                                             AS events,\n  ROUND(PERCENTILE_APPROX(dwell_seconds, 0.5), 0)     AS p50_dwell_sec,\n  ROUND(PERCENTILE_APPROX(dwell_seconds, 0.9), 0)     AS p90_dwell_sec,\n  ROUND(AVG(dwell_seconds), 1)                        AS avg_dwell_sec,\n  MAX(dwell_seconds)                                  AS max_dwell_sec\nFROM tabular.dataexpert.gold_stop_dwell_inferred\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY stop_id, route_id\nHAVING events >= 3\nORDER BY p90_dwell_sec DESC\nLIMIT 100"
+    },
+    {
+      "name": "ds_dwell_by_route",
+      "displayName": "Avg Dwell Delta by Route",
+      "query": "SELECT\n  route_id,\n  direction_id,\n  ROUND(AVG(dwell_delta_seconds), 1)                   AS avg_dwell_delta_sec,\n  ROUND(PERCENTILE_APPROX(actual_dwell_seconds, 0.9), 1) AS p90_actual_sec,\n  SUM(CASE WHEN actual_dwell_seconds > 120 THEN 1 ELSE 0 END) AS stops_over_2min,\n  COUNT(*)                                             AS total_stops\nFROM tabular.dataexpert.gold_stop_dwell_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND actual_dwell_seconds IS NOT NULL\nGROUP BY route_id, direction_id\nORDER BY avg_dwell_delta_sec DESC"
+    },
+    {
+      "name": "ds_dwell_distribution",
+      "displayName": "Dwell Distribution Buckets",
+      "query": "SELECT\n  CASE\n    WHEN actual_dwell_seconds < 15  THEN '0–15s (fast)'\n    WHEN actual_dwell_seconds < 30  THEN '15–30s (normal)'\n    WHEN actual_dwell_seconds < 60  THEN '30–60s (slow)'\n    WHEN actual_dwell_seconds < 120 THEN '60–120s (wheelchair/high pax)'\n    ELSE '120s+ (outlier)'\n  END                                                  AS dwell_bucket,\n  COUNT(*)                                             AS stop_events,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)  AS pct_of_total\nFROM tabular.dataexpert.gold_stop_dwell_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND actual_dwell_seconds IS NOT NULL\nGROUP BY dwell_bucket\nORDER BY MIN(actual_dwell_seconds)"
+    }
+  ],
+  "pages": [
+    {
+      "name": "pg_dwell_overview",
+      "displayName": "Dwell Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_dwell_header",
+            "textbox_spec": "## Stop Dwell Analysis\nBenchmarks (TCQSM/Valley Metro): fast=15s, normal=30s, high-pax=45–60s, wheelchair=120s. Delta = actual − scheduled."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "viz_dwell_dist",
+            "viz_spec": {
+              "type": "pie",
+              "dataset": "ds_dwell_distribution",
+              "dimension": { "field": "dwell_bucket" },
+              "measure": { "field": "stop_events" },
+              "title": "Dwell Time Distribution (Last 7 Days)"
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 2, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "viz_dwell_by_route",
+            "viz_spec": {
+              "type": "bar",
+              "dataset": "ds_dwell_by_route",
+              "x_axis": { "field": "route_id" },
+              "y_axis": [
+                { "field": "avg_dwell_delta_sec", "label": "Avg Delta (s)" },
+                { "field": "p90_actual_sec", "label": "p90 Actual (s)" }
+              ],
+              "title": "Dwell Delta by Route (Last 7 Days)"
+            }
+          },
+          "position": { "x": 2, "y": 2, "width": 4, "height": 5 }
+        },
+        {
+          "widget": {
+            "name": "viz_top_dwell_stops",
+            "viz_spec": {
+              "type": "bar",
+              "dataset": "ds_top_dwell_stops",
+              "x_axis": { "field": "stop_id" },
+              "y_axis": [{ "field": "avg_dwell_delta_sec", "label": "Avg Dwell Delta (s)" }],
+              "title": "Top 30 Stops by Dwell Inflation"
+            }
+          },
+          "position": { "x": 0, "y": 7, "width": 6, "height": 5 }
+        }
+      ]
+    },
+    {
+      "name": "pg_stop_detail",
+      "displayName": "Stop Detail",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_stop_header",
+            "textbox_spec": "## Per-Stop Dwell Detail\nScheduled vs actual. Stops with avg_delta > 30s indicate consistent boarding pressure. p90 > 120s = wheelchair/incident influence."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "viz_stop_dwell_table",
+            "viz_spec": {
+              "type": "table",
+              "dataset": "ds_stop_dwell_summary",
+              "title": "Stop Dwell Summary — Last 7 Days (top 100 by delta)"
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 6, "height": 8 }
+        },
+        {
+          "widget": {
+            "name": "txt_inferred_header",
+            "textbox_spec": "### VP-Inferred Dwell (from vehicle positions)\nDetects stationary vehicles within 40m of a stop. 30s bucket resolution. Route A/ALEX terminals may show high values due to scheduled layover."
+          },
+          "position": { "x": 0, "y": 10, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "viz_inferred_table",
+            "viz_spec": {
+              "type": "table",
+              "dataset": "ds_inferred_dwell_summary",
+              "title": "VP-Inferred Dwell — Last 7 Days (top 100 by p90)"
+            }
+          },
+          "position": { "x": 0, "y": 12, "width": 6, "height": 7 }
+        }
+      ]
+    }
+  ]
+}

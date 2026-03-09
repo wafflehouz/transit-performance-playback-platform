@@ -1,0 +1,154 @@
+{
+  "datasets": [
+    {
+      "name": "ds_route_otp_summary",
+      "displayName": "Route OTP Summary",
+      "query": "SELECT\n  service_date,\n  route_id,\n  direction_id,\n  ROUND(AVG(pct_on_time) * 100, 1)                     AS otp_pct,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)              AS avg_delay_min,\n  ROUND(PERCENTILE_APPROX(p90_delay_seconds, 0.9) / 60.0, 2) AS p90_delay_min,\n  ROUND(AVG(avg_late_start_seconds) / 60.0, 2)         AS avg_late_start_min,\n  SUM(trip_count)                                      AS total_trips\nFROM tabular.dataexpert.gold_route_metrics_15min\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY service_date, route_id, direction_id\nORDER BY service_date DESC, otp_pct ASC"
+    },
+    {
+      "name": "ds_otp_by_hour",
+      "displayName": "OTP by Hour of Day",
+      "query": "SELECT\n  route_id,\n  direction_id,\n  -- Convert UTC bucket hour to Phoenix local (UTC-7)\n  MOD(HOUR(time_bucket_15min) - 7 + 24, 24)            AS phoenix_hour,\n  ROUND(AVG(pct_on_time) * 100, 1)                     AS otp_pct,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)              AS avg_delay_min,\n  SUM(trip_count)                                      AS trip_count\nFROM tabular.dataexpert.gold_route_metrics_15min\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY route_id, direction_id, MOD(HOUR(time_bucket_15min) - 7 + 24, 24)\nORDER BY route_id, phoenix_hour"
+    },
+    {
+      "name": "ds_otp_trend",
+      "displayName": "System OTP Trend (Daily)",
+      "query": "SELECT\n  service_date,\n  ROUND(AVG(pct_on_time) * 100, 1)               AS system_otp_pct,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)        AS system_avg_delay_min,\n  SUM(trip_count)                                AS total_trips\nFROM tabular.dataexpert.gold_route_metrics_15min\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY service_date\nORDER BY service_date"
+    },
+    {
+      "name": "ds_worst_routes",
+      "displayName": "Bottom 20 Routes by OTP (Last 7 Days)",
+      "query": "SELECT\n  route_id,\n  direction_id,\n  ROUND(AVG(pct_on_time) * 100, 1)               AS avg_otp_pct,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)        AS avg_delay_min,\n  ROUND(AVG(avg_late_start_seconds) / 60.0, 2)   AS avg_late_start_min,\n  SUM(trip_count)                                AS total_trips\nFROM tabular.dataexpert.gold_route_metrics_15min\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY route_id, direction_id\nHAVING total_trips >= 10\nORDER BY avg_otp_pct ASC\nLIMIT 20"
+    },
+    {
+      "name": "ds_delay_heatmap",
+      "displayName": "Delay Heatmap (Route x Hour)",
+      "query": "SELECT\n  route_id,\n  MOD(HOUR(time_bucket_15min) - 7 + 24, 24)      AS phoenix_hour,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)        AS avg_delay_min,\n  ROUND(AVG(pct_on_time) * 100, 1)               AS otp_pct\nFROM tabular.dataexpert.gold_route_metrics_15min\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY route_id, MOD(HOUR(time_bucket_15min) - 7 + 24, 24)\nORDER BY route_id, phoenix_hour"
+    }
+  ],
+  "pages": [
+    {
+      "name": "pg_otp_overview",
+      "displayName": "OTP Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_otp_header",
+            "textbox_spec": "## Route On-Time Performance\nFTA standard: on-time = [-60s early, +299s late]. All times converted to Phoenix local (UTC-7)."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "viz_otp_trend",
+            "viz_spec": {
+              "type": "line",
+              "dataset": "ds_otp_trend",
+              "x_axis": { "field": "service_date" },
+              "y_axis": [
+                { "field": "system_otp_pct", "label": "System OTP %" },
+                { "field": "system_avg_delay_min", "label": "Avg Delay (min)" }
+              ],
+              "title": "System-Wide OTP & Avg Delay — Last 30 Days"
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 6, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "viz_worst_routes",
+            "viz_spec": {
+              "type": "bar",
+              "dataset": "ds_worst_routes",
+              "x_axis": { "field": "route_id" },
+              "y_axis": [
+                { "field": "avg_otp_pct", "label": "Avg OTP %" }
+              ],
+              "title": "Bottom 20 Routes by OTP (Last 7 Days)"
+            }
+          },
+          "position": { "x": 0, "y": 8, "width": 3, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "viz_worst_routes_table",
+            "viz_spec": {
+              "type": "table",
+              "dataset": "ds_worst_routes",
+              "title": "Bottom 20 Routes — Detail"
+            }
+          },
+          "position": { "x": 3, "y": 8, "width": 3, "height": 6 }
+        }
+      ]
+    },
+    {
+      "name": "pg_time_of_day",
+      "displayName": "Time-of-Day Analysis",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_tod_header",
+            "textbox_spec": "## OTP & Delay by Hour\nHour = Phoenix local time (UTC-7). Aggregated over the last 7 days."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "viz_delay_heatmap",
+            "viz_spec": {
+              "type": "heatmap",
+              "dataset": "ds_delay_heatmap",
+              "x_axis": { "field": "phoenix_hour", "label": "Hour (Phoenix)" },
+              "y_axis": { "field": "route_id", "label": "Route" },
+              "color": { "field": "avg_delay_min", "label": "Avg Delay (min)" },
+              "title": "Delay Heatmap — Route × Hour of Day"
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 6, "height": 8 }
+        },
+        {
+          "widget": {
+            "name": "viz_otp_by_hour",
+            "viz_spec": {
+              "type": "line",
+              "dataset": "ds_otp_by_hour",
+              "x_axis": { "field": "phoenix_hour", "label": "Hour (Phoenix)" },
+              "y_axis": [
+                { "field": "otp_pct", "label": "OTP %" },
+                { "field": "avg_delay_min", "label": "Avg Delay (min)" }
+              ],
+              "series": { "field": "route_id" },
+              "title": "OTP % by Hour — Select Route in Filter"
+            }
+          },
+          "position": { "x": 0, "y": 10, "width": 6, "height": 6 }
+        }
+      ]
+    },
+    {
+      "name": "pg_route_detail",
+      "displayName": "Route Detail",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_detail_header",
+            "textbox_spec": "## Per-Route Daily Detail\nGrain: (service_date, route_id, direction_id). Filter by route to drill in."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "viz_route_otp_table",
+            "viz_spec": {
+              "type": "table",
+              "dataset": "ds_route_otp_summary",
+              "title": "Route OTP Summary — Last 30 Days"
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 6, "height": 10 }
+        }
+      ]
+    }
+  ]
+}
