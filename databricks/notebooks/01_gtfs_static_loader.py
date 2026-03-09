@@ -315,6 +315,74 @@ fact_stop_schedule.show(10, truncate=False)
 
 # COMMAND ----------
 
+# MAGIC %md ## Step 4b — silver_dim_calendar
+
+# COMMAND ----------
+
+print("Loading calendar.txt...")
+raw_calendar = read_gtfs_csv("calendar.txt")
+
+if raw_calendar is None:
+    print("  WARNING: calendar.txt not found — skipping silver_dim_calendar.")
+else:
+    dim_calendar = (
+        raw_calendar
+        .select(
+            F.col("service_id").cast(StringType()),
+            safe_col(raw_calendar, "monday",    IntegerType()),
+            safe_col(raw_calendar, "tuesday",   IntegerType()),
+            safe_col(raw_calendar, "wednesday", IntegerType()),
+            safe_col(raw_calendar, "thursday",  IntegerType()),
+            safe_col(raw_calendar, "friday",    IntegerType()),
+            safe_col(raw_calendar, "saturday",  IntegerType()),
+            safe_col(raw_calendar, "sunday",    IntegerType()),
+            # start_date / end_date are YYYYMMDD strings — kept as STRING intentionally
+            F.col("start_date").cast(StringType()),
+            F.col("end_date").cast(StringType()),
+        )
+        .dropDuplicates(["service_id"])
+        .withColumn("loaded_ts", F.lit(RUN_TS))
+    )
+
+    dim_calendar.write.format("delta").mode("overwrite").option("overwriteSchema", "true") \
+        .saveAsTable(SILVER_DIM_CALENDAR)
+
+    print(f"✓ {SILVER_DIM_CALENDAR}: {dim_calendar.count():,} service IDs")
+    dim_calendar.show(5, truncate=False)
+
+# COMMAND ----------
+
+# MAGIC %md ## Step 4c — silver_dim_calendar_dates
+
+# COMMAND ----------
+
+print("Loading calendar_dates.txt...")
+raw_calendar_dates = read_gtfs_csv("calendar_dates.txt")
+
+if raw_calendar_dates is None:
+    print("  WARNING: calendar_dates.txt not found — skipping silver_dim_calendar_dates.")
+else:
+    # exception_type: 1 = service added for this date, 2 = service removed for this date
+    dim_calendar_dates = (
+        raw_calendar_dates
+        .select(
+            F.col("service_id").cast(StringType()),
+            # date is YYYYMMDD string — kept as STRING intentionally (mirrors GTFS format)
+            F.col("date").cast(StringType()),
+            F.col("exception_type").cast(IntegerType()),
+        )
+        .dropDuplicates(["service_id", "date"])
+        .withColumn("loaded_ts", F.lit(RUN_TS))
+    )
+
+    dim_calendar_dates.write.format("delta").mode("overwrite").option("overwriteSchema", "true") \
+        .saveAsTable(SILVER_DIM_CALENDAR_DATES)
+
+    print(f"✓ {SILVER_DIM_CALENDAR_DATES}: {dim_calendar_dates.count():,} exception rows")
+    dim_calendar_dates.show(5, truncate=False)
+
+# COMMAND ----------
+
 # MAGIC %md ## Step 5 — Sanity Checks
 
 # COMMAND ----------
@@ -326,10 +394,25 @@ stop_count  = spark.table(SILVER_DIM_STOP).count()
 trip_count  = spark.table(SILVER_DIM_TRIP).count()
 stu_count   = spark.table(SILVER_FACT_STOP_SCHEDULE).count()
 
-print(f"  silver_dim_route         : {route_count:>8,} rows")
-print(f"  silver_dim_stop          : {stop_count:>8,} rows")
-print(f"  silver_dim_trip          : {trip_count:>8,} rows")
-print(f"  silver_fact_stop_schedule: {stu_count:>8,} rows")
+# Calendar tables are optional — may not exist if the feed didn't include them
+try:
+    calendar_count = spark.table(SILVER_DIM_CALENDAR).count()
+    calendar_status = f"{calendar_count:>8,} rows"
+except Exception:
+    calendar_status = "        (not loaded)"
+
+try:
+    cal_dates_count = spark.table(SILVER_DIM_CALENDAR_DATES).count()
+    cal_dates_status = f"{cal_dates_count:>8,} rows"
+except Exception:
+    cal_dates_status = "        (not loaded)"
+
+print(f"  silver_dim_route          : {route_count:>8,} rows")
+print(f"  silver_dim_stop           : {stop_count:>8,} rows")
+print(f"  silver_dim_trip           : {trip_count:>8,} rows")
+print(f"  silver_dim_calendar       : {calendar_status}")
+print(f"  silver_dim_calendar_dates : {cal_dates_status}")
+print(f"  silver_fact_stop_schedule : {stu_count:>8,} rows")
 
 # Check referential integrity: trips in stop_times should exist in dim_trip
 orphan_trips = (

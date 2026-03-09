@@ -78,9 +78,11 @@ BRONZE_VEHICLE_POSITIONS  = tbl("bronze_vehicle_position_events")
 BRONZE_ALERTS             = tbl("bronze_alerts_events")
 
 # Silver — dimensions
-SILVER_DIM_ROUTE  = tbl("silver_dim_route")
-SILVER_DIM_STOP   = tbl("silver_dim_stop")
-SILVER_DIM_TRIP   = tbl("silver_dim_trip")
+SILVER_DIM_ROUTE           = tbl("silver_dim_route")
+SILVER_DIM_STOP            = tbl("silver_dim_stop")
+SILVER_DIM_TRIP            = tbl("silver_dim_trip")
+SILVER_DIM_CALENDAR        = tbl("silver_dim_calendar")
+SILVER_DIM_CALENDAR_DATES  = tbl("silver_dim_calendar_dates")
 
 # Silver — facts
 SILVER_FACT_STOP_SCHEDULE       = tbl("silver_fact_stop_schedule")
