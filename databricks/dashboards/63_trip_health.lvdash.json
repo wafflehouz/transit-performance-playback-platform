@@ -2,172 +2,41 @@
   "datasets": [
     {
       "name": "ds_trip_reliability",
-      "displayName": "Trip Reliability — Daily Summary",
-      "query": "SELECT\n  service_date,\n  route_id,\n  direction_id,\n  COUNT(*)                                             AS total_trips,\n  SUM(CASE WHEN data_quality_flag IS NULL THEN 1 ELSE 0 END) AS trips_with_data,\n  ROUND(\n    SUM(CASE WHEN data_quality_flag IS NULL THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1\n  )                                                    AS data_coverage_pct,\n  -- FTA OTP: -60s early to +299s late\n  ROUND(AVG(\n    CASE\n      WHEN total_trip_delay_seconds BETWEEN -60 AND 299 THEN 1.0\n      WHEN total_trip_delay_seconds IS NOT NULL THEN 0.0\n    END\n  ) * 100, 1)                                          AS otp_pct,\n  ROUND(AVG(total_trip_delay_seconds) / 60.0, 2)       AS avg_delay_min,\n  ROUND(PERCENTILE_APPROX(total_trip_delay_seconds, 0.9) / 60.0, 2) AS p90_delay_min,\n  ROUND(AVG(late_start_seconds) / 60.0, 2)             AS avg_late_start_min,\n  ROUND(\n    PERCENTILE_APPROX(\n      UNIX_TIMESTAMP(actual_end_ts) - UNIX_TIMESTAMP(actual_start_ts), 0.5\n    ) / 60.0, 1\n  )                                                    AS p50_runtime_min\nFROM tabular.dataexpert.gold_trip_timeline_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY service_date, route_id, direction_id\nORDER BY service_date DESC, otp_pct ASC"
+      "displayName": "Route Reliability — daily (last 30 days)",
+      "query": "SELECT\n  service_date,\n  route_id,\n  direction_id,\n  COUNT(*)                                                   AS total_trips,\n  SUM(CASE WHEN data_quality_flag IS NULL THEN 1 ELSE 0 END)  AS trips_with_data,\n  ROUND(\n    SUM(CASE WHEN data_quality_flag IS NULL THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1\n  )                                                          AS data_coverage_pct,\n  ROUND(AVG(\n    CASE\n      WHEN total_trip_delay_seconds BETWEEN -60 AND 299 THEN 1.0\n      WHEN total_trip_delay_seconds IS NOT NULL THEN 0.0\n    END\n  ) * 100, 1)                                               AS otp_pct,\n  ROUND(AVG(total_trip_delay_seconds) / 60.0, 2)            AS avg_delay_min,\n  ROUND(PERCENTILE_APPROX(total_trip_delay_seconds, 0.9) / 60.0, 2) AS p90_delay_min,\n  ROUND(AVG(late_start_seconds) / 60.0, 2)                  AS avg_late_start_min\nFROM tabular.dataexpert.gold_trip_timeline_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY service_date, route_id, direction_id\nORDER BY service_date DESC, otp_pct ASC"
     },
     {
       "name": "ds_trip_delay_dist",
-      "displayName": "Trip Delay Distribution (Last 7 Days)",
-      "query": "SELECT\n  CASE\n    WHEN total_trip_delay_seconds < -60   THEN '< -1 min (very early)'\n    WHEN total_trip_delay_seconds < 0     THEN '-1–0 min (slightly early)'\n    WHEN total_trip_delay_seconds < 60    THEN '0–1 min (on time)'\n    WHEN total_trip_delay_seconds < 180   THEN '1–3 min (negligible late)'\n    WHEN total_trip_delay_seconds < 360   THEN '3–6 min (moderate late)'\n    ELSE '6+ min (severe late)'\n  END                                                  AS delay_bucket,\n  COUNT(*)                                             AS trip_count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)  AS pct_of_total\nFROM tabular.dataexpert.gold_trip_timeline_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND data_quality_flag IS NULL\n  AND total_trip_delay_seconds IS NOT NULL\nGROUP BY delay_bucket\nORDER BY MIN(total_trip_delay_seconds)"
+      "displayName": "Trip Delay Distribution (last 7 days)",
+      "query": "SELECT\n  CASE\n    WHEN total_trip_delay_seconds < -60   THEN '1_very_early (<-1 min)'\n    WHEN total_trip_delay_seconds < 0     THEN '2_slightly_early (-1-0 min)'\n    WHEN total_trip_delay_seconds < 60    THEN '3_on_time (0-1 min)'\n    WHEN total_trip_delay_seconds < 180   THEN '4_negligible (1-3 min)'\n    WHEN total_trip_delay_seconds < 360   THEN '5_moderate (3-6 min)'\n    ELSE '6_severe (6+ min)'\n  END                                                        AS delay_bucket,\n  COUNT(*)                                                   AS trip_count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)        AS pct_of_total\nFROM tabular.dataexpert.gold_trip_timeline_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND data_quality_flag IS NULL\n  AND total_trip_delay_seconds IS NOT NULL\nGROUP BY delay_bucket\nORDER BY delay_bucket"
     },
     {
       "name": "ds_late_start_analysis",
-      "displayName": "Late Start Analysis by Route",
-      "query": "SELECT\n  route_id,\n  direction_id,\n  COUNT(*)                                             AS trips,\n  ROUND(AVG(late_start_seconds) / 60.0, 2)             AS avg_late_start_min,\n  ROUND(PERCENTILE_APPROX(late_start_seconds, 0.9) / 60.0, 2) AS p90_late_start_min,\n  SUM(CASE WHEN late_start_seconds > 180 THEN 1 ELSE 0 END) AS trips_late_start_3min_plus,\n  ROUND(\n    SUM(CASE WHEN late_start_seconds > 180 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1\n  )                                                    AS pct_late_start_3min_plus\nFROM tabular.dataexpert.gold_trip_timeline_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND data_quality_flag IS NULL\n  AND late_start_seconds IS NOT NULL\nGROUP BY route_id, direction_id\nHAVING trips >= 5\nORDER BY avg_late_start_min DESC\nLIMIT 50"
+      "displayName": "Late Start by Route (last 7 days)",
+      "query": "SELECT\n  route_id,\n  direction_id,\n  COUNT(*)                                                   AS trips,\n  ROUND(AVG(late_start_seconds) / 60.0, 2)                  AS avg_late_start_min,\n  ROUND(PERCENTILE_APPROX(late_start_seconds, 0.9) / 60.0, 2) AS p90_late_start_min,\n  SUM(CASE WHEN late_start_seconds > 180 THEN 1 ELSE 0 END) AS trips_3min_plus,\n  ROUND(\n    SUM(CASE WHEN late_start_seconds > 180 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1\n  )                                                         AS pct_3min_plus\nFROM tabular.dataexpert.gold_trip_timeline_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND data_quality_flag IS NULL\n  AND late_start_seconds IS NOT NULL\nGROUP BY route_id, direction_id\nHAVING trips >= 5\nORDER BY avg_late_start_min DESC\nLIMIT 50"
     },
     {
       "name": "ds_system_daily_kpi",
-      "displayName": "System KPI Trend",
-      "query": "SELECT\n  service_date,\n  COUNT(*)                                             AS total_trips,\n  SUM(CASE WHEN data_quality_flag IS NULL THEN 1 ELSE 0 END) AS trips_with_data,\n  ROUND(\n    SUM(CASE WHEN data_quality_flag IS NULL THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1\n  )                                                    AS data_coverage_pct,\n  ROUND(AVG(\n    CASE\n      WHEN total_trip_delay_seconds BETWEEN -60 AND 299 THEN 1.0\n      WHEN total_trip_delay_seconds IS NOT NULL THEN 0.0\n    END\n  ) * 100, 1)                                          AS system_otp_pct,\n  ROUND(AVG(CASE WHEN data_quality_flag IS NULL THEN total_trip_delay_seconds END) / 60.0, 2) AS system_avg_delay_min,\n  ROUND(AVG(CASE WHEN data_quality_flag IS NULL THEN late_start_seconds END) / 60.0, 2) AS system_avg_late_start_min\nFROM tabular.dataexpert.gold_trip_timeline_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY service_date\nORDER BY service_date"
+      "displayName": "System KPI Trend (daily, last 30 days)",
+      "query": "SELECT\n  service_date,\n  COUNT(*)                                                   AS total_trips,\n  ROUND(\n    SUM(CASE WHEN data_quality_flag IS NULL THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1\n  )                                                         AS data_coverage_pct,\n  ROUND(AVG(\n    CASE\n      WHEN total_trip_delay_seconds BETWEEN -60 AND 299 THEN 1.0\n      WHEN total_trip_delay_seconds IS NOT NULL THEN 0.0\n    END\n  ) * 100, 1)                                               AS system_otp_pct,\n  ROUND(AVG(CASE WHEN data_quality_flag IS NULL THEN total_trip_delay_seconds END) / 60.0, 2) AS system_avg_delay_min,\n  ROUND(AVG(CASE WHEN data_quality_flag IS NULL THEN late_start_seconds END) / 60.0, 2) AS system_avg_late_start_min\nFROM tabular.dataexpert.gold_trip_timeline_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY service_date\nORDER BY service_date"
     },
     {
       "name": "ds_severe_trips",
-      "displayName": "Severely Late Trips (≥6 min, Last 7 Days)",
-      "query": "SELECT\n  service_date,\n  trip_id,\n  route_id,\n  direction_id,\n  ROUND(total_trip_delay_seconds / 60.0, 1)            AS delay_min,\n  ROUND(late_start_seconds / 60.0, 1)                  AS late_start_min,\n  stop_count,\n  ROUND(\n    (UNIX_TIMESTAMP(actual_end_ts) - UNIX_TIMESTAMP(actual_start_ts)) / 60.0, 1\n  )                                                    AS actual_runtime_min,\n  ROUND(\n    (UNIX_TIMESTAMP(planned_end_ts) - UNIX_TIMESTAMP(planned_start_ts)) / 60.0, 1\n  )                                                    AS scheduled_runtime_min\nFROM tabular.dataexpert.gold_trip_timeline_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND total_trip_delay_seconds >= 360\n  AND data_quality_flag IS NULL\nORDER BY service_date DESC, delay_min DESC\nLIMIT 200"
+      "displayName": "Severely Late Trips ≥6 min (last 7 days)",
+      "query": "SELECT\n  service_date,\n  trip_id,\n  route_id,\n  direction_id,\n  ROUND(total_trip_delay_seconds / 60.0, 1)   AS delay_min,\n  ROUND(late_start_seconds / 60.0, 1)         AS late_start_min,\n  stop_count,\n  ROUND(\n    (UNIX_TIMESTAMP(actual_end_ts) - UNIX_TIMESTAMP(actual_start_ts)) / 60.0, 1\n  )                                           AS actual_runtime_min,\n  ROUND(\n    (UNIX_TIMESTAMP(planned_end_ts) - UNIX_TIMESTAMP(planned_start_ts)) / 60.0, 1\n  )                                           AS scheduled_runtime_min\nFROM tabular.dataexpert.gold_trip_timeline_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND total_trip_delay_seconds >= 360\n  AND data_quality_flag IS NULL\nORDER BY service_date DESC, delay_min DESC\nLIMIT 200"
     }
   ],
   "pages": [
     {
-      "name": "pg_kpi",
-      "displayName": "System KPIs",
+      "name": "pg_trip_health",
+      "displayName": "Trip Health",
       "layout": [
         {
           "widget": {
-            "name": "txt_kpi_header",
-            "textbox_spec": "## System Trip Health KPIs\nDelay bands (CAD/AVL): <1 min=negligible, 1–3 min=moderate, 3–6 min=significant, ≥6 min=severe. OTP window: -60s early to +299s late (FTA standard)."
+            "name": "txt_trip_header",
+            "textbox_spec": "## Trip Health KPIs\n\nDelay bands (CAD/AVL): <1 min=negligible, 1–3=moderate, 3–6=significant, ≥6=severe. OTP window: -60s early to +299s late (FTA standard).\n\n**Suggested visualizations:**\n- `ds_system_daily_kpi` → Line chart: x=`service_date`, y=`system_otp_pct` + `system_avg_delay_min` + `system_avg_late_start_min`\n- `ds_trip_delay_dist` → Bar chart: x=`delay_bucket`, y=`trip_count` (shows distribution shape)\n- `ds_trip_delay_dist` → Pie: dimension=`delay_bucket`, measure=`trip_count`\n- `ds_late_start_analysis` → Bar: x=`route_id`, y=`avg_late_start_min` + `pct_3min_plus`\n- `ds_late_start_analysis` → Table (detail)\n- `ds_severe_trips` → Table (drill-down, cross-ref `trip_id` in `gold_trip_path_fact`)\n- `ds_trip_reliability` → Table (route×day grain, 30-day)"
           },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
-        },
-        {
-          "widget": {
-            "name": "viz_system_otp_trend",
-            "viz_spec": {
-              "type": "line",
-              "dataset": "ds_system_daily_kpi",
-              "x_axis": { "field": "service_date" },
-              "y_axis": [
-                { "field": "system_otp_pct", "label": "OTP %" },
-                { "field": "system_avg_delay_min", "label": "Avg Delay (min)" },
-                { "field": "system_avg_late_start_min", "label": "Avg Late Start (min)" }
-              ],
-              "title": "System KPI Trend — Last 30 Days"
-            }
-          },
-          "position": { "x": 0, "y": 2, "width": 6, "height": 5 }
-        },
-        {
-          "widget": {
-            "name": "viz_delay_dist",
-            "viz_spec": {
-              "type": "bar",
-              "dataset": "ds_trip_delay_dist",
-              "x_axis": { "field": "delay_bucket" },
-              "y_axis": [{ "field": "trip_count", "label": "Trip Count" }],
-              "title": "Trip Delay Distribution (Last 7 Days)"
-            }
-          },
-          "position": { "x": 0, "y": 7, "width": 4, "height": 5 }
-        },
-        {
-          "widget": {
-            "name": "viz_delay_dist_pct",
-            "viz_spec": {
-              "type": "pie",
-              "dataset": "ds_trip_delay_dist",
-              "dimension": { "field": "delay_bucket" },
-              "measure": { "field": "trip_count" },
-              "title": "Delay Distribution % (Last 7 Days)"
-            }
-          },
-          "position": { "x": 4, "y": 7, "width": 2, "height": 5 }
-        }
-      ]
-    },
-    {
-      "name": "pg_late_start",
-      "displayName": "Late Start Analysis",
-      "layout": [
-        {
-          "widget": {
-            "name": "txt_late_start_header",
-            "textbox_spec": "## Late Start Analysis\nLate start = actual departure at first stop minus scheduled departure. Persistent late starts indicate scheduling issues or terminal congestion."
-          },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
-        },
-        {
-          "widget": {
-            "name": "viz_late_start_routes",
-            "viz_spec": {
-              "type": "bar",
-              "dataset": "ds_late_start_analysis",
-              "x_axis": { "field": "route_id" },
-              "y_axis": [
-                { "field": "avg_late_start_min", "label": "Avg Late Start (min)" },
-                { "field": "pct_late_start_3min_plus", "label": "% Trips >3 Min Late Start" }
-              ],
-              "title": "Late Start by Route — Last 7 Days"
-            }
-          },
-          "position": { "x": 0, "y": 2, "width": 6, "height": 6 }
-        },
-        {
-          "widget": {
-            "name": "viz_late_start_table",
-            "viz_spec": {
-              "type": "table",
-              "dataset": "ds_late_start_analysis",
-              "title": "Late Start Detail by Route"
-            }
-          },
-          "position": { "x": 0, "y": 8, "width": 6, "height": 6 }
-        }
-      ]
-    },
-    {
-      "name": "pg_severe_trips",
-      "displayName": "Severe Delays",
-      "layout": [
-        {
-          "widget": {
-            "name": "txt_severe_header",
-            "textbox_spec": "## Severely Late Trips (≥6 min)\nThese are the worst performers from the last 7 days. Use trip_id to cross-reference with the playback path in `gold_trip_path_fact`."
-          },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
-        },
-        {
-          "widget": {
-            "name": "viz_severe_table",
-            "viz_spec": {
-              "type": "table",
-              "dataset": "ds_severe_trips",
-              "title": "Severely Late Trips — Last 7 Days (≥6 min delay)"
-            }
-          },
-          "position": { "x": 0, "y": 2, "width": 6, "height": 10 }
-        }
-      ]
-    },
-    {
-      "name": "pg_route_reliability",
-      "displayName": "Route Reliability",
-      "layout": [
-        {
-          "widget": {
-            "name": "txt_route_rel_header",
-            "textbox_spec": "## Route Reliability — Last 30 Days\nGrain: (service_date, route_id, direction_id). Data coverage = trips with actual GTFS-RT data vs total scheduled."
-          },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
-        },
-        {
-          "widget": {
-            "name": "viz_route_rel_table",
-            "viz_spec": {
-              "type": "table",
-              "dataset": "ds_trip_reliability",
-              "title": "Route Reliability — Last 30 Days"
-            }
-          },
-          "position": { "x": 0, "y": 2, "width": 6, "height": 10 }
+          "position": { "x": 0, "y": 0, "width": 6, "height": 7 }
         }
       ]
     }
