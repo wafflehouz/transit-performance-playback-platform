@@ -191,42 +191,44 @@ print(f"  Today (YYYYMMDD)             : {today_str_yyyymmdd}")
 print(f"  Day-of-week column           : {day_of_week_col}")
 
 # ── 4d: Determine active service_ids ─────────────────────────────────────────
+# Strategy A: calendar.txt + calendar_dates.txt (standard GTFS weekly schedule)
+# Strategy B: calendar_dates.txt only (exception_type=1 for today) — used by
+#             agencies like Valley Metro that publish explicit per-date service
+#             rather than a recurring weekly pattern.
 try:
-    cal_df = spark.table(SILVER_DIM_CALENDAR)
-
-    if cal_df.count() == 0:
-        raise ValueError("silver_dim_calendar is empty")
-
-    # Base active set: service runs on today's day-of-week AND today falls in range
-    base_active = (
-        cal_df
-        .filter(F.col(day_of_week_col) == 1)
-        .filter(F.col("start_date") <= today_str_yyyymmdd)
-        .filter(F.col("end_date")   >= today_str_yyyymmdd)
-        .select("service_id")
+    cal_dates_df = (
+        spark.table(SILVER_DIM_CALENDAR_DATES)
+        .filter(F.col("date") == today_str_yyyymmdd)
     )
+    today_added   = cal_dates_df.filter(F.col("exception_type") == 1).select("service_id")
+    today_removed = cal_dates_df.filter(F.col("exception_type") == 2).select("service_id")
 
-    # calendar_dates overrides: add exception_type=1 (added), remove exception_type=2 (removed)
     try:
-        cal_dates_df = spark.table(SILVER_DIM_CALENDAR_DATES).filter(
-            F.col("date") == today_str_yyyymmdd
+        cal_df = spark.table(SILVER_DIM_CALENDAR)
+        if cal_df.count() == 0:
+            raise ValueError("silver_dim_calendar is empty")
+
+        # Standard: weekly base + calendar_dates overrides
+        base_active = (
+            cal_df
+            .filter(F.col(day_of_week_col) == 1)
+            .filter(F.col("start_date") <= today_str_yyyymmdd)
+            .filter(F.col("end_date")   >= today_str_yyyymmdd)
+            .select("service_id")
         )
-
-        added_ids   = cal_dates_df.filter(F.col("exception_type") == 1).select("service_id")
-        removed_ids = cal_dates_df.filter(F.col("exception_type") == 2).select("service_id")
-
-        # Union base + added, then subtract removed
         active_service_ids = (
             base_active
-            .union(added_ids)
+            .union(today_added)
             .distinct()
-            .join(removed_ids, "service_id", "left_anti")
+            .join(today_removed, "service_id", "left_anti")
         )
+        print("  Calendar source: calendar.txt + calendar_dates.txt")
 
-    except (AnalysisException, Exception):
-        # calendar_dates table not yet loaded — use base active only
-        print("  NOTE: silver_dim_calendar_dates not available; using calendar.txt only.")
-        active_service_ids = base_active.distinct()
+    except (AnalysisException, ValueError):
+        # Agency uses calendar_dates.txt only (e.g. Valley Metro)
+        # exception_type=1 for today = service runs today
+        active_service_ids = today_added.distinct()
+        print("  Calendar source: calendar_dates.txt only (no calendar.txt)")
 
     active_count = active_service_ids.count()
     print(f"  Active service_ids today     : {active_count}")
@@ -260,7 +262,7 @@ try:
     print(f"  Expected trips active now    : {expected_trips_now}")
 
 except AnalysisException as e:
-    print(f"  WARNING: silver_dim_calendar not available ({e})")
+    print(f"  WARNING: silver_dim_calendar_dates not available ({e})")
     print("  Falling through to historical fallback (Step 5).")
     used_fallback = True
 except ValueError as e:
