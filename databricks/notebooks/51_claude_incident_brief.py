@@ -30,6 +30,10 @@
 
 # COMMAND ----------
 
+dbutils.library.restartPython()
+
+# COMMAND ----------
+
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 
 # COMMAND ----------
