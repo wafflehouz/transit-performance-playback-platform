@@ -1,0 +1,101 @@
+{
+  "datasets": [
+    {
+      "name": "ds_otp_donut",
+      "displayName": "OTP Summary — Early / On-Time / Late",
+      "query": "-- Swiftly window: 1 min early (-60s) / 6 min late (360s)\nSELECT\n  CASE\n    WHEN arrival_delay_seconds < -60  THEN 'Early'\n    WHEN arrival_delay_seconds <= 360  THEN 'On-Time'\n    ELSE 'Late'\n  END                                                          AS otp_category,\n  COUNT(*)                                                     AS stop_count,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1)          AS pct\nFROM tabular.dataexpert.gold_stop_dwell_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND actual_arrival_ts IS NOT NULL\nGROUP BY otp_category\nORDER BY otp_category"
+    },
+    {
+      "name": "ds_otp_trend",
+      "displayName": "OTP Trend — Daily Early / On-Time / Late (30 days)",
+      "query": "SELECT\n  service_date,\n  COUNT(*)                                                     AS total_stops,\n  ROUND(AVG(CASE WHEN arrival_delay_seconds < -60   THEN 1.0 ELSE 0.0 END) * 100, 1) AS early_pct,\n  ROUND(AVG(CASE WHEN arrival_delay_seconds BETWEEN -60 AND 360 THEN 1.0 ELSE 0.0 END) * 100, 1) AS on_time_pct,\n  ROUND(AVG(CASE WHEN arrival_delay_seconds > 360   THEN 1.0 ELSE 0.0 END) * 100, 1) AS late_pct\nFROM tabular.dataexpert.gold_stop_dwell_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\n  AND actual_arrival_ts IS NOT NULL\nGROUP BY service_date\nORDER BY service_date"
+    },
+    {
+      "name": "ds_stop_otp",
+      "displayName": "OTP by Stop (last 7 days)",
+      "query": "SELECT\n  stop_id,\n  route_id,\n  direction_id,\n  MIN(stop_sequence)                                           AS stop_order,\n  COUNT(*)                                                     AS observations,\n  ROUND(AVG(CASE WHEN arrival_delay_seconds < -60   THEN 1.0 ELSE 0.0 END) * 100, 1) AS early_pct,\n  ROUND(AVG(CASE WHEN arrival_delay_seconds BETWEEN -60 AND 360 THEN 1.0 ELSE 0.0 END) * 100, 1) AS on_time_pct,\n  ROUND(AVG(CASE WHEN arrival_delay_seconds > 360   THEN 1.0 ELSE 0.0 END) * 100, 1) AS late_pct,\n  ROUND(AVG(arrival_delay_seconds) / 60.0, 1)                 AS avg_delay_min,\n  ROUND(PERCENTILE_APPROX(arrival_delay_seconds, 0.5) / 60.0, 1) AS p50_delay_min,\n  ROUND(PERCENTILE_APPROX(arrival_delay_seconds, 0.9) / 60.0, 1) AS p90_delay_min\nFROM tabular.dataexpert.gold_stop_dwell_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND actual_arrival_ts IS NOT NULL\nGROUP BY stop_id, route_id, direction_id\nHAVING observations >= 5\nORDER BY route_id, direction_id, stop_order"
+    },
+    {
+      "name": "ds_tod_otp",
+      "displayName": "OTP by Time of Day — 15-min buckets (last 7 days)",
+      "query": "SELECT\n  -- Floor to 15-min bucket in Phoenix local time\n  DATE_FORMAT(\n    TIMESTAMPADD(\n      MINUTE,\n      FLOOR(MINUTE(TIMESTAMPADD(HOUR, -7, actual_arrival_ts)) / 15) * 15\n        - MINUTE(TIMESTAMPADD(HOUR, -7, actual_arrival_ts)),\n      TIMESTAMPADD(HOUR, -7, actual_arrival_ts)\n    ),\n    'HH:mm'\n  )                                                            AS time_bucket_phoenix,\n  SUM(CASE WHEN arrival_delay_seconds < -60   THEN 1 ELSE 0 END) AS early_count,\n  SUM(CASE WHEN arrival_delay_seconds BETWEEN -60 AND 360 THEN 1 ELSE 0 END) AS on_time_count,\n  SUM(CASE WHEN arrival_delay_seconds > 360   THEN 1 ELSE 0 END) AS late_count,\n  COUNT(*)                                                     AS total_count\nFROM tabular.dataexpert.gold_stop_dwell_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND actual_arrival_ts IS NOT NULL\nGROUP BY time_bucket_phoenix\nORDER BY time_bucket_phoenix"
+    },
+    {
+      "name": "ds_delay_histogram",
+      "displayName": "Delay Distribution Histogram (last 7 days)",
+      "query": "SELECT\n  ROUND(arrival_delay_seconds / 60.0)                          AS delay_minute,\n  CASE\n    WHEN arrival_delay_seconds < -60  THEN 'Early'\n    WHEN arrival_delay_seconds <= 360 THEN 'On-Time'\n    ELSE 'Late'\n  END                                                          AS otp_category,\n  COUNT(*)                                                     AS stop_count\nFROM tabular.dataexpert.gold_stop_dwell_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND actual_arrival_ts IS NOT NULL\n  AND arrival_delay_seconds BETWEEN -1200 AND 3600\nGROUP BY delay_minute, otp_category\nORDER BY delay_minute"
+    },
+    {
+      "name": "ds_schedule",
+      "displayName": "Schedule View — Trip x Stop delays (yesterday)",
+      "query": "SELECT\n  t.service_date,\n  t.route_id,\n  t.direction_id,\n  t.trip_id,\n  -- Planned departure of first stop = trip start time\n  MIN(t.scheduled_arrival_ts) OVER (PARTITION BY t.trip_id)   AS trip_start_ts,\n  t.stop_sequence,\n  t.stop_id,\n  ROUND(t.arrival_delay_seconds / 60.0, 1)                    AS delay_min,\n  CASE\n    WHEN t.arrival_delay_seconds < -60  THEN 'early'\n    WHEN t.arrival_delay_seconds <= 360 THEN 'on_time'\n    ELSE 'late'\n  END                                                          AS otp_category,\n  t.scheduled_arrival_ts,\n  t.actual_arrival_ts\nFROM tabular.dataexpert.gold_stop_dwell_fact t\nWHERE t.service_date = CURRENT_DATE - INTERVAL 1 DAYS\n  AND t.actual_arrival_ts IS NOT NULL\nORDER BY t.route_id, t.direction_id, trip_start_ts, t.stop_sequence"
+    }
+  ],
+  "pages": [
+    {
+      "name": "pg_summary",
+      "displayName": "Summary",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_summary",
+            "textbox_spec": "## OTP Summary\n\nPer-stop OTP using Swiftly window: **1 min early (-60s) / 6 min late (+360s)**. Filters: Route + Direction (left sidebar).\n\n**Suggested visualizations:**\n- `ds_otp_donut` → Pie/Donut: dimension=`otp_category`, measure=`stop_count` — mirrors Swiftly summary donut\n- `ds_otp_donut` → Table: shows Early / On-Time / Late counts and %\n- `ds_otp_trend` → Line chart: x=`service_date`, y=`early_pct` + `on_time_pct` + `late_pct` (3 series) — mirrors Swiftly OTP over time\n- `ds_otp_trend` → Table: daily breakdown"
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 5 }
+        }
+      ]
+    },
+    {
+      "name": "pg_stops",
+      "displayName": "Stops",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_stops",
+            "textbox_spec": "## OTP by Stop\n\nPer-stop Early/On-Time/Late breakdown. Sorted by `stop_order` (stop_sequence) to match route geography — first stop at top, last stop at bottom.\n\n**Suggested visualizations:**\n- `ds_stop_otp` → Bar chart: x=`stop_id`, y=`early_pct` + `on_time_pct` + `late_pct` as stacked series, sorted by `stop_order` — mirrors Swiftly Stops tab\n- `ds_stop_otp` → Table: all columns for drill-down (p50/p90 delay per stop not in Swiftly but useful)\n\n**Note:** Apply Route + Direction global filters to see a single route in stop order."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 5 }
+        }
+      ]
+    },
+    {
+      "name": "pg_time_of_day",
+      "displayName": "Time of Day",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_tod",
+            "textbox_spec": "## OTP by Time of Day\n\n15-minute buckets in Phoenix local time (UTC-7). Y axis = number of stop departures. Mirrors Swiftly Time of Day tab.\n\n**Suggested visualizations:**\n- `ds_tod_otp` → Stacked bar: x=`time_bucket_phoenix`, y=`early_count` + `on_time_count` + `late_count` as stacked series — exact Swiftly match\n- Set colors: Early=pink (#e57373), On-Time=teal (#4db6ac), Late=yellow (#ffb74d)\n- `ds_tod_otp` → Table: shows raw counts per bucket"
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 5 }
+        }
+      ]
+    },
+    {
+      "name": "pg_histogram",
+      "displayName": "Histogram",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_histogram",
+            "textbox_spec": "## Delay Distribution Histogram\n\nDistribution of per-stop delays in 1-minute bins. X = minutes early (negative) or late (positive). Mirrors Swiftly Histogram tab.\n\n**Suggested visualizations:**\n- `ds_delay_histogram` → Bar chart: x=`delay_minute`, y=`stop_count`, series=`otp_category` (stacked)\n- Set colors: Early=pink, On-Time=teal, Late=yellow\n- X axis range: -20 to +60 covers 99%+ of observations\n- `ds_delay_histogram` → Table: raw counts by minute bucket"
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 5 }
+        }
+      ]
+    },
+    {
+      "name": "pg_schedule",
+      "displayName": "Schedule",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_schedule",
+            "textbox_spec": "## Schedule View — Trip × Stop Delays\n\nShows yesterday's data. Each row = one stop observation with delay in minutes. Filter by Route + Direction to see a specific run. Sorted by trip start time then stop sequence.\n\n**Note:** Swiftly's Schedule tab is a pivot matrix (trips as rows, stops as columns). Databricks tables can't pivot natively — use this as a sortable/filterable table instead. The frontend playback UI will render the full matrix view.\n\n**Suggested visualization:**\n- `ds_schedule` → Table: columns = `trip_start_ts`, `trip_id`, `stop_sequence`, `stop_id`, `delay_min`, `otp_category`\n- Sort by `trip_start_ts` ASC then `stop_sequence` ASC\n- Color-code `otp_category`: early=pink, on_time=teal, late=yellow (use conditional formatting if available)"
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 5 }
+        }
+      ]
+    }
+  ]
+}
