@@ -8,7 +8,7 @@
     {
       "name": "ds_otp_by_hour",
       "displayName": "OTP by Hour of Day (last 7 days)",
-      "query": "SELECT\n  route_id,\n  direction_id,\n  MOD(HOUR(time_bucket_15min) - 7 + 24, 24)  AS phoenix_hour,\n  ROUND(AVG(pct_on_time) * 100, 1)           AS otp_pct,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)   AS avg_delay_min,\n  SUM(trip_count)                            AS trip_count\nFROM tabular.dataexpert.gold_route_metrics_15min\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY route_id, direction_id, MOD(HOUR(time_bucket_15min) - 7 + 24, 24)\nORDER BY route_id, phoenix_hour"
+      "query": "SELECT\n  service_date,\n  route_id,\n  direction_id,\n  MOD(HOUR(time_bucket_15min) - 7 + 24, 24)  AS phoenix_hour,\n  ROUND(AVG(pct_on_time) * 100, 1)           AS otp_pct,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)   AS avg_delay_min,\n  SUM(trip_count)                            AS trip_count\nFROM tabular.dataexpert.gold_route_metrics_15min\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY service_date, route_id, direction_id, MOD(HOUR(time_bucket_15min) - 7 + 24, 24)\nORDER BY route_id, phoenix_hour"
     },
     {
       "name": "ds_otp_trend",
@@ -23,7 +23,7 @@
     {
       "name": "ds_delay_heatmap",
       "displayName": "Delay Heatmap (route x hour, last 7 days)",
-      "query": "SELECT\n  route_id,\n  MOD(HOUR(time_bucket_15min) - 7 + 24, 24)  AS phoenix_hour,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)   AS avg_delay_min,\n  ROUND(AVG(pct_on_time) * 100, 1)          AS otp_pct\nFROM tabular.dataexpert.gold_route_metrics_15min\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY route_id, MOD(HOUR(time_bucket_15min) - 7 + 24, 24)\nORDER BY route_id, phoenix_hour"
+      "query": "SELECT\n  service_date,\n  route_id,\n  MOD(HOUR(time_bucket_15min) - 7 + 24, 24)  AS phoenix_hour,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2)   AS avg_delay_min,\n  ROUND(AVG(pct_on_time) * 100, 1)          AS otp_pct\nFROM tabular.dataexpert.gold_route_metrics_15min\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY service_date, route_id, MOD(HOUR(time_bucket_15min) - 7 + 24, 24)\nORDER BY route_id, phoenix_hour"
     }
   ],
   "pages": [
@@ -34,7 +34,7 @@
         {
           "widget": {
             "name": "txt_otp_header",
-            "textbox_spec": "## Route On-Time Performance\n\nFTA standard: on-time = [-60s early, +299s late]. Hours shown in Phoenix local (UTC-7).\n\n**Suggested visualizations:**\n- `ds_otp_trend` → Line chart: x=`service_date`, y=`system_otp_pct` + `system_avg_delay_min`\n- `ds_worst_routes` → Bar chart: x=`route_id`, y=`avg_otp_pct`\n- `ds_worst_routes` → Table (detail)\n- `ds_delay_heatmap` → Heatmap: x=`phoenix_hour`, y=`route_id`, color=`avg_delay_min`\n- `ds_otp_by_hour` → Line chart: x=`phoenix_hour`, y=`otp_pct`, series=`route_id`\n- `ds_route_otp_summary` → Table (drill-down)"
+            "textbox_spec": "## Route On-Time Performance\n\nFTA standard: on-time = [-60s early, +299s late]. Hours shown in Phoenix local (UTC-7).\n\n**Global filters:** Route ID → Multiple values, Service Date → Date range. Link both filters to: `ds_route_otp_summary`, `ds_otp_by_hour`, `ds_worst_routes`, `ds_delay_heatmap`. Do NOT link to `ds_otp_trend` (system-wide dataset — intentionally excludes route filter to show fleet-level trend).\n\n**AVG aggregation reminders:** For percentage Y-axes (otp_pct, avg_otp_pct), set Lakeview chart aggregation to AVG, not SUM, to avoid inflating values across multiple rows.\n\n**Suggested visualizations:**\n- `ds_otp_trend` → Line chart: x=`service_date`, y=`system_otp_pct` + `system_avg_delay_min` (system-wide, no route filter)\n- `ds_worst_routes` → Bar chart: x=`route_id`, y=`avg_otp_pct` (aggregation: AVG)\n- `ds_worst_routes` → Table (detail)\n- `ds_delay_heatmap` → Heatmap: x=`phoenix_hour`, y=`route_id`, color=`avg_delay_min`\n- `ds_otp_by_hour` → Line chart: x=`phoenix_hour`, y=`otp_pct` (aggregation: AVG), series=`route_id`\n- `ds_route_otp_summary` → Table (drill-down)"
           },
           "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
         }

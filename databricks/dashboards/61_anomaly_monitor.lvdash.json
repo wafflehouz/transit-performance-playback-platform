@@ -8,7 +8,7 @@
     {
       "name": "ds_anomaly_counts",
       "displayName": "Daily Anomaly Counts by Severity (30 days)",
-      "query": "SELECT\n  service_date,\n  severity,\n  COUNT(*)                   AS event_count,\n  COUNT(DISTINCT route_id)   AS routes_affected\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY service_date, severity\nORDER BY service_date, severity"
+      "query": "SELECT\n  service_date,\n  route_id,\n  severity,\n  COUNT(*)                   AS event_count\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY service_date, route_id, severity\nORDER BY service_date, severity"
     },
     {
       "name": "ds_top_offender_routes",
@@ -18,7 +18,7 @@
     {
       "name": "ds_anomaly_by_hour",
       "displayName": "Anomaly Events by Hour of Day (30 days)",
-      "query": "SELECT\n  MOD(HOUR(time_bucket_15min) - 7 + 24, 24)  AS phoenix_hour,\n  severity,\n  COUNT(*)                                    AS event_count\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY MOD(HOUR(time_bucket_15min) - 7 + 24, 24), severity\nORDER BY phoenix_hour, severity"
+      "query": "SELECT\n  service_date,\n  route_id,\n  MOD(HOUR(time_bucket_15min) - 7 + 24, 24)  AS phoenix_hour,\n  severity,\n  COUNT(*)                                    AS event_count\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY service_date, route_id, MOD(HOUR(time_bucket_15min) - 7 + 24, 24), severity\nORDER BY phoenix_hour, severity"
     },
     {
       "name": "ds_otp_drop_routes",
@@ -34,7 +34,7 @@
         {
           "widget": {
             "name": "txt_anomaly_header",
-            "textbox_spec": "## Service Anomaly Monitor\n\nThresholds: **critical** = delay ≥6 min AND >2σ above baseline, OR OTP dropped ≥25 pp. **Warning** = ≥3 min AND >1.5σ, OR OTP dropped ≥15 pp.\n\n**Suggested visualizations:**\n- `ds_anomaly_counts` → Stacked bar: x=`service_date`, y=`event_count`, series=`severity`\n- `ds_anomaly_by_hour` → Bar: x=`phoenix_hour`, y=`event_count`, series=`severity`\n- `ds_top_offender_routes` → Bar: x=`route_id`, y=`anomaly_count`, series=`severity`\n- `ds_top_offender_routes` → Table (detail)\n- `ds_active_anomalies` → Table (live event feed)\n- `ds_otp_drop_routes` → Table (OTP drop feed)"
+            "textbox_spec": "## Service Anomaly Monitor\n\nThresholds: **critical** = delay ≥6 min AND >2σ above baseline, OR OTP dropped ≥25 pp. **Warning** = ≥3 min AND >1.5σ, OR OTP dropped ≥15 pp.\n\n**Global filters:** Route ID → Multiple values, Service Date → Date range. Link both filters to: `ds_active_anomalies`, `ds_anomaly_counts`, `ds_anomaly_by_hour`, `ds_top_offender_routes`, `ds_otp_drop_routes`. All datasets in this dashboard carry route_id and service_date and support route-level filtering.\n\n**AVG aggregation reminders:** For percentage Y-axes (otp_drop_pp), set Lakeview chart aggregation to AVG, not SUM.\n\n**Suggested visualizations:**\n- `ds_anomaly_counts` → Stacked bar: x=`service_date`, y=`event_count`, series=`severity`\n- `ds_anomaly_by_hour` → Bar: x=`phoenix_hour`, y=`event_count`, series=`severity`\n- `ds_top_offender_routes` → Bar: x=`route_id`, y=`anomaly_count`, series=`severity`\n- `ds_top_offender_routes` → Table (detail)\n- `ds_active_anomalies` → Table (live event feed)\n- `ds_otp_drop_routes` → Table (OTP drop feed)"
           },
           "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
         }
