@@ -39,6 +39,16 @@
       "name": "ds_inferred_dwell_trend",
       "displayName": "VP-Inferred Dwell Trend — Daily (last 30 days)",
       "query": "SELECT\n  route_id,\n  service_date,\n  ROUND(AVG(dwell_seconds), 0)                         AS avg_dwell_sec,\n  ROUND(PERCENTILE_APPROX(dwell_seconds, 0.5), 0)      AS p50_dwell_sec,\n  ROUND(PERCENTILE_APPROX(dwell_seconds, 0.9), 0)      AS p90_dwell_sec,\n  COUNT(*)                                              AS events\nFROM tabular.dataexpert.gold_stop_dwell_inferred\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY route_id, service_date\nORDER BY service_date, route_id"
+    },
+    {
+      "name": "ds_route_stop_profile",
+      "displayName": "Route Stop Profile — Avg Dwell by Stop Sequence (last 7 days)",
+      "query": "WITH trip_bounds AS (\n  SELECT trip_id,\n    MIN(stop_sequence) AS first_seq,\n    MAX(stop_sequence) AS last_seq\n  FROM tabular.dataexpert.gold_stop_dwell_inferred\n  WHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  GROUP BY trip_id\n)\nSELECT\n  i.route_id,\n  i.direction_id,\n  i.service_date,\n  i.stop_id,\n  COALESCE(s.stop_name, i.stop_id)                      AS stop_name,\n  MIN(i.stop_sequence)                                  AS stop_sequence,\n  COUNT(*)                                              AS observations,\n  ROUND(AVG(i.dwell_seconds), 0)                        AS avg_dwell_sec,\n  ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.5), 0)    AS p50_dwell_sec,\n  ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.9), 0)    AS p90_dwell_sec,\n  MAX(i.dwell_seconds)                                  AS max_dwell_sec\nFROM tabular.dataexpert.gold_stop_dwell_inferred i\nINNER JOIN trip_bounds tb ON i.trip_id = tb.trip_id\nLEFT JOIN tabular.dataexpert.silver_dim_stop s ON i.stop_id = s.stop_id\nWHERE i.service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND i.stop_sequence != tb.first_seq\n  AND i.stop_sequence != tb.last_seq\nGROUP BY i.route_id, i.direction_id, i.service_date, i.stop_id, COALESCE(s.stop_name, i.stop_id)\nHAVING observations >= 3\nORDER BY i.route_id, i.direction_id, MIN(i.stop_sequence)"
+    },
+    {
+      "name": "ds_trip_stop_heatmap",
+      "displayName": "Trip × Stop Dwell Heatmap (yesterday)",
+      "query": "WITH trip_bounds AS (\n  SELECT trip_id,\n    MIN(stop_sequence) AS first_seq,\n    MAX(stop_sequence) AS last_seq\n  FROM tabular.dataexpert.gold_stop_dwell_inferred\n  WHERE service_date = CURRENT_DATE - INTERVAL 1 DAYS\n  GROUP BY trip_id\n)\nSELECT\n  i.route_id,\n  i.direction_id,\n  i.service_date,\n  i.trip_id,\n  i.stop_sequence,\n  i.stop_id,\n  COALESCE(s.stop_name, i.stop_id)                      AS stop_name,\n  i.dwell_seconds\nFROM tabular.dataexpert.gold_stop_dwell_inferred i\nINNER JOIN trip_bounds tb ON i.trip_id = tb.trip_id\nLEFT JOIN tabular.dataexpert.silver_dim_stop s ON i.stop_id = s.stop_id\nWHERE i.service_date = CURRENT_DATE - INTERVAL 1 DAYS\n  AND i.stop_sequence != tb.first_seq\n  AND i.stop_sequence != tb.last_seq\nORDER BY i.route_id, i.direction_id, i.trip_id, i.stop_sequence"
     }
   ],
   "pages": [
@@ -65,6 +75,19 @@
             "textbox_spec": "## VP-Inferred Dwell — Time of Day Heatmap\n\nDwell time inferred from vehicle position haversine proximity (≤40m, speed ≤1 m/s). Accuracy: ±30 seconds. Hours in Phoenix local (UTC-7).\n\n**Source:** `gold_stop_dwell_inferred` — independent of GTFS-RT predictions; derived purely from vehicle movement evidence.\n\n**Global filters** (route_id + service_date) are linked to all three datasets on this tab.\n\n**Widget 1 — Route × Hour Heatmap** (`ds_inferred_heatmap_route`)\n- Chart type: Heatmap\n- X: `phoenix_hour` (0–23), Y: `route_id`, Color: `avg_dwell_sec` (aggregation: AVG)\n- Color ramp: Custom Sequential — light yellow (#fff9c4) → orange (#ff7043) → red (#b71c1c)\n- Reveals which routes have sustained dwell inflation at specific hours (rush hour vs off-peak)\n\n**Widget 2 — Top Stops × Hour Heatmap** (`ds_inferred_heatmap_stop`)\n- Chart type: Heatmap\n- X: `phoenix_hour`, Y: `stop_name`, Color: `avg_dwell_sec` (aggregation: AVG)\n- Same color ramp as Widget 1\n- Shows top 40 stops by avg dwell ≥60s — pinpoints chronic problem stops and their peak hours\n- Select a single route for a focused view\n\n**Widget 3 — Daily Dwell Trend** (`ds_inferred_dwell_trend`)\n- Chart type: Line\n- X: `service_date` (no transform), Y series 1: `avg_dwell_sec` (AVG), Y series 2: `p90_dwell_sec` (AVG)\n- Series: `route_id` — shows if dwell is trending up, down, or stable over 30 days\n- Select 1–3 routes for a readable chart; fleet-wide will overlap too many lines\n\n**Interpretation notes:**\n- Dwell ≥120s at non-terminal stops = likely wheelchair boarding or oversized passenger load\n- Persistent dwell at the same stop across multiple days = candidate for schedule padding review\n- Spikes on a single date = one-off event (incident, weather, special event)\n- Route A/ALEX terminal stops may show high values — expected layover behavior"
           },
           "position": { "x": 0, "y": 0, "width": 6, "height": 10 }
+        }
+      ]
+    },
+    {
+      "name": "pg_trip_profile",
+      "displayName": "Trip Profile",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_trip_profile_header",
+            "textbox_spec": "## VP-Inferred Dwell — Trip Profile\n\nShows dwell by stop sequence along a route (profile) and individual trip × stop breakdown (matrix). Select a **single route + direction** for meaningful results. Terminal stops (first/last per trip) are excluded.\n\n**Widget 1 — Route Stop Profile** (`ds_route_stop_profile`)\n- Chart type: Bar\n- X: `stop_name`, Y: `avg_dwell_sec` (AVG) — optional second series: `p90_dwell_sec`\n- Sort by `stop_sequence` ASC (not alphabetical) — this preserves route order\n- Shows avg dwell per stop aggregated across 7 days. Pattern to look for:\n  - Inflation concentrated at specific stops = boarding demand or infrastructure issue at that stop\n  - Inflation building progressively = schedule compression (bus running late, rushing through stops)\n  - Flat profile with one spike = incident or recurring event at that location\n\n**Widget 2 — Trip × Stop Heatmap** (`ds_trip_stop_heatmap`)\n- Chart type: Heatmap\n- X: `stop_sequence`, Y: `trip_id`, Color: `dwell_seconds` (AVG)\n- Color ramp: Custom Sequential — #fff9c4 (light yellow) → #b71c1c (deep red), min=30, max=300\n- Shows yesterday's data. One row = one trip. One column = one stop position.\n- A red column = one stop affecting every trip (stop-level problem)\n- A red row = one trip that ran badly all day (vehicle or operator issue)\n- A red block = a combination of bad stop + bad time window\n\n**Filter tip:** Link route_id and service_date global filters to both datasets on this tab."
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 9 }
         }
       ]
     }
