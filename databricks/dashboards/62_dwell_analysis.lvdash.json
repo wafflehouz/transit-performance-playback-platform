@@ -24,6 +24,21 @@
       "name": "ds_dwell_distribution",
       "displayName": "Dwell Distribution Buckets (last 7 days)",
       "query": "SELECT\n  route_id,\n  service_date,\n  CASE\n    WHEN actual_dwell_seconds < 15  THEN '1_fast (0-15s)'\n    WHEN actual_dwell_seconds < 30  THEN '2_normal (15-30s)'\n    WHEN actual_dwell_seconds < 60  THEN '3_slow (30-60s)'\n    WHEN actual_dwell_seconds < 120 THEN '4_high_pax (60-120s)'\n    ELSE '5_outlier (120s+)'\n  END                                                   AS dwell_bucket,\n  COUNT(*)                                              AS stop_events,\n  ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (PARTITION BY route_id, service_date), 1) AS pct_of_total\nFROM tabular.dataexpert.gold_stop_dwell_fact\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND actual_dwell_seconds IS NOT NULL\nGROUP BY route_id, service_date, dwell_bucket\nORDER BY route_id, dwell_bucket"
+    },
+    {
+      "name": "ds_inferred_heatmap_route",
+      "displayName": "VP-Inferred Dwell — Route × Hour of Day (last 7 days)",
+      "query": "SELECT\n  route_id,\n  service_date,\n  MOD(HOUR(TIMESTAMPADD(HOUR, -7, inferred_arrival_ts)) + 24, 24) AS phoenix_hour,\n  ROUND(AVG(dwell_seconds), 0)                         AS avg_dwell_sec,\n  ROUND(PERCENTILE_APPROX(dwell_seconds, 0.9), 0)      AS p90_dwell_sec,\n  COUNT(*)                                              AS observations\nFROM tabular.dataexpert.gold_stop_dwell_inferred\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY route_id, service_date, MOD(HOUR(TIMESTAMPADD(HOUR, -7, inferred_arrival_ts)) + 24, 24)\nHAVING observations >= 3\nORDER BY route_id, phoenix_hour"
+    },
+    {
+      "name": "ds_inferred_heatmap_stop",
+      "displayName": "VP-Inferred Dwell — Top Stops × Hour of Day (last 7 days)",
+      "query": "WITH top_stops AS (\n  SELECT stop_id\n  FROM tabular.dataexpert.gold_stop_dwell_inferred\n  WHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  GROUP BY stop_id\n  HAVING AVG(dwell_seconds) >= 60\n  ORDER BY AVG(dwell_seconds) DESC\n  LIMIT 40\n)\nSELECT\n  i.stop_id,\n  COALESCE(s.stop_name, i.stop_id)                      AS stop_name,\n  i.route_id,\n  i.service_date,\n  MOD(HOUR(TIMESTAMPADD(HOUR, -7, i.inferred_arrival_ts)) + 24, 24) AS phoenix_hour,\n  ROUND(AVG(i.dwell_seconds), 0)                        AS avg_dwell_sec,\n  ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.9), 0)    AS p90_dwell_sec,\n  COUNT(*)                                              AS observations\nFROM tabular.dataexpert.gold_stop_dwell_inferred i\nINNER JOIN top_stops ts ON i.stop_id = ts.stop_id\nLEFT JOIN tabular.dataexpert.silver_dim_stop s ON i.stop_id = s.stop_id\nWHERE i.service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nGROUP BY i.stop_id, COALESCE(s.stop_name, i.stop_id), i.route_id, i.service_date,\n  MOD(HOUR(TIMESTAMPADD(HOUR, -7, i.inferred_arrival_ts)) + 24, 24)\nHAVING observations >= 2\nORDER BY stop_name, phoenix_hour"
+    },
+    {
+      "name": "ds_inferred_dwell_trend",
+      "displayName": "VP-Inferred Dwell Trend — Daily (last 30 days)",
+      "query": "SELECT\n  route_id,\n  service_date,\n  ROUND(AVG(dwell_seconds), 0)                         AS avg_dwell_sec,\n  ROUND(PERCENTILE_APPROX(dwell_seconds, 0.5), 0)      AS p50_dwell_sec,\n  ROUND(PERCENTILE_APPROX(dwell_seconds, 0.9), 0)      AS p90_dwell_sec,\n  COUNT(*)                                              AS events\nFROM tabular.dataexpert.gold_stop_dwell_inferred\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY route_id, service_date\nORDER BY service_date, route_id"
     }
   ],
   "pages": [
@@ -34,9 +49,22 @@
         {
           "widget": {
             "name": "txt_dwell_header",
-            "textbox_spec": "## Stop Dwell Analysis\n\nBenchmarks (TCQSM/Valley Metro): fast=15s, normal=30s, high-pax=45–60s, wheelchair=120s. Delta = actual − scheduled.\n\n**Global filters:** Route ID → Multiple values, Service Date → Date range. Link both filters to all datasets in this dashboard: `ds_stop_dwell_summary`, `ds_top_dwell_stops`, `ds_inferred_dwell_summary`, `ds_dwell_by_route`, `ds_dwell_distribution`. All datasets carry route_id and service_date.\n\n**AVG aggregation reminders:** For percentage Y-axes (pct_of_total), set Lakeview chart aggregation to AVG, not SUM, to avoid double-counting across route/date rows.\n\n**Chart Y axis:** Use `stop_name` instead of `stop_id` for all stop-level bar charts — stop_name is now included via LEFT JOIN to silver_dim_stop (falls back to stop_id when name is absent).\n\n**Note:** High dwell values at Route A/ALEX terminals are expected layover behavior.\n\n**Suggested visualizations:**\n- `ds_dwell_distribution` → Pie or bar: dimension=`dwell_bucket`, measure=`stop_events`\n- `ds_dwell_by_route` → Bar: x=`route_id`, y=`avg_dwell_delta_sec` + `p90_actual_sec`\n- `ds_top_dwell_stops` → Bar: x=`stop_name`, y=`avg_dwell_delta_sec`\n- `ds_stop_dwell_summary` → Table (per-stop detail, top 100 by delta)\n- `ds_inferred_dwell_summary` → Table (VP-inferred, top 100 by p90)"
+            "textbox_spec": "## Stop Dwell Analysis\n\nBenchmarks (TCQSM/Valley Metro): fast=15s, normal=30s, high-pax=45–60s, wheelchair=120s. Delta = actual − scheduled.\n\n**Global filters:** Route ID → Multiple values, Service Date → Date range. Link both filters to all datasets: `ds_stop_dwell_summary`, `ds_top_dwell_stops`, `ds_inferred_dwell_summary`, `ds_dwell_by_route`, `ds_dwell_distribution`, `ds_inferred_heatmap_route`, `ds_inferred_heatmap_stop`, `ds_inferred_dwell_trend`. All datasets carry route_id and service_date.\n\n**AVG aggregation reminders:** For percentage Y-axes (pct_of_total), set Lakeview chart aggregation to AVG, not SUM, to avoid double-counting across route/date rows.\n\n**Chart Y axis:** Use `stop_name` instead of `stop_id` for all stop-level bar charts.\n\n**Note:** High dwell values at Route A/ALEX terminals are expected layover behavior.\n\n**Suggested visualizations:**\n- `ds_dwell_distribution` → Pie or bar: dimension=`dwell_bucket`, measure=`stop_events`\n- `ds_dwell_by_route` → Bar: x=`route_id`, y=`avg_dwell_delta_sec` + `p90_actual_sec`\n- `ds_top_dwell_stops` → Bar: x=`stop_name`, y=`avg_dwell_delta_sec`\n- `ds_stop_dwell_summary` → Table (per-stop detail, top 100 by delta)\n- `ds_inferred_dwell_summary` → Table (VP-inferred, top 100 by p90)\n\nSee **Inferred Dwell Heatmap** tab for time-of-day patterns."
           },
           "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
+        }
+      ]
+    },
+    {
+      "name": "pg_inferred_heatmap",
+      "displayName": "Inferred Dwell Heatmap",
+      "layout": [
+        {
+          "widget": {
+            "name": "txt_heatmap_header",
+            "textbox_spec": "## VP-Inferred Dwell — Time of Day Heatmap\n\nDwell time inferred from vehicle position haversine proximity (≤40m, speed ≤1 m/s). Accuracy: ±30 seconds. Hours in Phoenix local (UTC-7).\n\n**Source:** `gold_stop_dwell_inferred` — independent of GTFS-RT predictions; derived purely from vehicle movement evidence.\n\n**Global filters** (route_id + service_date) are linked to all three datasets on this tab.\n\n**Widget 1 — Route × Hour Heatmap** (`ds_inferred_heatmap_route`)\n- Chart type: Heatmap\n- X: `phoenix_hour` (0–23), Y: `route_id`, Color: `avg_dwell_sec` (aggregation: AVG)\n- Color ramp: Custom Sequential — light yellow (#fff9c4) → orange (#ff7043) → red (#b71c1c)\n- Reveals which routes have sustained dwell inflation at specific hours (rush hour vs off-peak)\n\n**Widget 2 — Top Stops × Hour Heatmap** (`ds_inferred_heatmap_stop`)\n- Chart type: Heatmap\n- X: `phoenix_hour`, Y: `stop_name`, Color: `avg_dwell_sec` (aggregation: AVG)\n- Same color ramp as Widget 1\n- Shows top 40 stops by avg dwell ≥60s — pinpoints chronic problem stops and their peak hours\n- Select a single route for a focused view\n\n**Widget 3 — Daily Dwell Trend** (`ds_inferred_dwell_trend`)\n- Chart type: Line\n- X: `service_date` (no transform), Y series 1: `avg_dwell_sec` (AVG), Y series 2: `p90_dwell_sec` (AVG)\n- Series: `route_id` — shows if dwell is trending up, down, or stable over 30 days\n- Select 1–3 routes for a readable chart; fleet-wide will overlap too many lines\n\n**Interpretation notes:**\n- Dwell ≥120s at non-terminal stops = likely wheelchair boarding or oversized passenger load\n- Persistent dwell at the same stop across multiple days = candidate for schedule padding review\n- Spikes on a single date = one-off event (incident, weather, special event)\n- Route A/ALEX terminal stops may show high values — expected layover behavior"
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 10 }
         }
       ]
     }
