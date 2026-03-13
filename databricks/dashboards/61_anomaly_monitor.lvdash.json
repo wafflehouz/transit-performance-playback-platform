@@ -3,7 +3,7 @@
     {
       "name": "ds_active_anomalies",
       "displayName": "Anomaly Events (last 7 days)",
-      "query": "SELECT\n  service_date,\n  route_id,\n  direction_id,\n  DATE_FORMAT(TIMESTAMPADD(HOUR, -7, time_bucket_15min), 'HH:mm') AS bucket_time_phoenix,\n  severity,\n  trigger_flags,\n  ROUND(avg_delay_seconds / 60.0, 2)         AS avg_delay_min,\n  ROUND(z_score, 2)                          AS z_score,\n  ROUND(otp_drop_pp * 100, 1)               AS otp_drop_pp,\n  ROUND(delay_vs_baseline_seconds / 60.0, 2) AS vs_baseline_min\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nORDER BY service_date DESC, severity DESC, avg_delay_seconds DESC"
+      "query": "SELECT\n  service_date,\n  route_id,\n  direction_id,\n  DATE_FORMAT(TIMESTAMPADD(HOUR, -7, time_bucket_15min), 'HH:mm') AS bucket_time_phoenix,\n  severity,\n  trigger_flags,\n  ROUND(avg_delay_seconds / 60.0, 2)         AS avg_delay_min,\n  ROUND(delay_z_score, 2)                    AS delay_z_score,\n  ROUND(otp_drop_pp * 100, 1)               AS otp_drop_pp,\n  ROUND(delay_vs_baseline_seconds / 60.0, 2) AS vs_baseline_min\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\nORDER BY service_date DESC, severity DESC, avg_delay_seconds DESC"
     },
     {
       "name": "ds_anomaly_counts",
@@ -13,7 +13,7 @@
     {
       "name": "ds_top_offender_routes",
       "displayName": "Top Offender Routes (30 days)",
-      "query": "SELECT\n  route_id,\n  severity,\n  COUNT(*)                             AS anomaly_count,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2) AS avg_delay_min,\n  ROUND(AVG(z_score), 2)               AS avg_z_score\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY route_id, severity\nORDER BY anomaly_count DESC\nLIMIT 30"
+      "query": "SELECT\n  route_id,\n  severity,\n  COUNT(*)                             AS anomaly_count,\n  ROUND(AVG(avg_delay_seconds) / 60.0, 2) AS avg_delay_min,\n  ROUND(AVG(delay_z_score), 2)         AS avg_z_score\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 30 DAYS\nGROUP BY route_id, severity\nORDER BY anomaly_count DESC\nLIMIT 30"
     },
     {
       "name": "ds_anomaly_by_hour",
@@ -23,7 +23,7 @@
     {
       "name": "ds_otp_drop_routes",
       "displayName": "OTP Drop Triggers (last 7 days)",
-      "query": "SELECT\n  route_id,\n  service_date,\n  ROUND(otp_drop_pp * 100, 1)  AS otp_drop_pp,\n  severity,\n  trigger_flags\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND ARRAY_CONTAINS(trigger_flags, 'otp_drop')\nORDER BY otp_drop_pp DESC\nLIMIT 50"
+      "query": "SELECT\n  route_id,\n  service_date,\n  ROUND(otp_drop_pp * 100, 1)  AS otp_drop_pp,\n  severity,\n  trigger_flags\nFROM tabular.dataexpert.gold_anomaly_events\nWHERE service_date >= CURRENT_DATE - INTERVAL 7 DAYS\n  AND trigger_flags LIKE '%otp_drop%'\nORDER BY otp_drop_pp DESC\nLIMIT 50"
     }
   ],
   "pages": [
@@ -34,7 +34,7 @@
         {
           "widget": {
             "name": "txt_anomaly_header",
-            "textbox_spec": "## Service Anomaly Monitor\n\nThresholds: **critical** = delay ≥6 min AND >2σ above baseline, OR OTP dropped ≥25 pp. **Warning** = ≥3 min AND >1.5σ, OR OTP dropped ≥15 pp.\n\n**Global filters:** Route ID → Multiple values, Service Date → Date range. Link both filters to: `ds_active_anomalies`, `ds_anomaly_counts`, `ds_anomaly_by_hour`, `ds_top_offender_routes`, `ds_otp_drop_routes`. All datasets in this dashboard carry route_id and service_date and support route-level filtering.\n\n**AVG aggregation reminders:** For percentage Y-axes (otp_drop_pp), set Lakeview chart aggregation to AVG, not SUM.\n\n**Suggested visualizations:**\n- `ds_anomaly_counts` → Stacked bar: x=`service_date`, y=`event_count`, series=`severity`\n- `ds_anomaly_by_hour` → Bar: x=`phoenix_hour`, y=`event_count`, series=`severity`\n- `ds_top_offender_routes` → Bar: x=`route_id`, y=`anomaly_count`, series=`severity`\n- `ds_top_offender_routes` → Table (detail)\n- `ds_active_anomalies` → Table (live event feed)\n- `ds_otp_drop_routes` → Table (OTP drop feed)"
+            "textbox_spec": "## Service Anomaly Monitor\n\nThresholds: **critical** = delay ≥6 min AND >2σ above baseline, OR OTP dropped ≥25 pp. **Warning** = ≥3 min AND >1.5σ, OR OTP dropped ≥15 pp.\n\n**Global filters:** Route ID → Multiple values, Service Date → Date range. Link both filters to: `ds_active_anomalies`, `ds_anomaly_counts`, `ds_anomaly_by_hour`, `ds_top_offender_routes`, `ds_otp_drop_routes`.\n\n**Known limitations:**\n1. **Immature baseline (< 28 days):** Anomaly counts will be elevated and false-positive-heavy until ~28 days of data accumulate. With only 3–5 baseline samples per bucket, stddev is near zero and minor deviations trigger as critical. Counts will stabilize significantly after 2 weeks.\n2. **GTFS schedule changes not versioned:** Notebook 01 overwrites the GTFS static tables daily. When Valley Metro publishes a quarterly schedule update (typically Mar/Jun/Sep/Dec), new gold data reflects the new schedule but the 28-day baseline window will contain a mix of old and new schedule delays. This inflates baseline stddev and suppresses or distorts anomaly detection for up to 28 days post-change. Mitigation: track GTFS feed version date and reset baseline on schedule change (future enhancement).\n3. **Grain difference vs OTP dashboard:** Anomaly detection operates on trip-level 15-min bucket metrics (gold_route_metrics_15min), not stop-level OTP. A route showing 85% stop-level OTP can still fire anomalies if trip-level delay exceeds the (tight) baseline threshold at certain time buckets.\n\n**AVG aggregation reminders:** For percentage Y-axes (otp_drop_pp), set Lakeview chart aggregation to AVG, not SUM.\n\n**Suggested visualizations:**\n- `ds_anomaly_counts` → Stacked bar: x=`service_date`, y=`event_count` (SUM), series=`severity` — colors: critical=#e57373, warning=#ffb74d\n- `ds_anomaly_by_hour` → Bar (stacked): x=`phoenix_hour`, y=`event_count` (SUM), series=`severity`\n- `ds_top_offender_routes` → Bar (stacked): x=`route_id`, y=`anomaly_count` (SUM), series=`severity`\n- `ds_top_offender_routes` → Table (detail with avg_delay_min and avg_z_score)\n- `ds_active_anomalies` → Table: columns=`service_date`, `route_id`, `bucket_time_phoenix`, `severity`, `avg_delay_min`, `delay_z_score`, `vs_baseline_min`\n- `ds_otp_drop_routes` → Table: columns=`route_id`, `service_date`, `otp_drop_pp`, `severity`"
           },
           "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
         }
