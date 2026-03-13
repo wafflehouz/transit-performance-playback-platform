@@ -256,6 +256,22 @@ def format_worst_buckets(rows):
         )
     return "\n".join(lines) if lines else "  (none)"
 
+# ── Baseline maturity warning ─────────────────────────────────────────────────
+# Inject a caveat when anomaly counts are suspiciously high, which typically
+# indicates the 28-day baseline is still immature (stddev ≈ 0 → false positives).
+IMMATURE_BASELINE_THRESHOLD = 200
+
+baseline_age_note = (
+    "\nCAVEAT: The anomaly baseline currently has fewer than 14 days of data. "
+    f"The {anomaly_count:,} flagged buckets today are likely inflated due to near-zero "
+    "stddev estimates on a short baseline window. Treat this brief with lower confidence "
+    "until the baseline matures (~28 days of data). Flag insights as preliminary."
+) if anomaly_count > IMMATURE_BASELINE_THRESHOLD else ""
+
+if baseline_age_note:
+    print(f"⚠ Anomaly count ({anomaly_count:,}) exceeds threshold ({IMMATURE_BASELINE_THRESHOLD}) "
+          f"— adding immature baseline caveat to prompt")
+
 # ── Assemble the user prompt ───────────────────────────────────────────────────
 user_prompt = f"""
 Transit Performance Incident Brief Request
@@ -288,7 +304,7 @@ NOTES ON THRESHOLDS
 -------------------
 - Warning fires when avg_delay ≥ 180 s AND > baseline + 1.5×stddev, OR OTP drops ≥ 15 pp
 - Critical fires when avg_delay ≥ 360 s AND > baseline + 2.0×stddev, OR OTP drops ≥ 25 pp
-- Baseline is a rolling 28-day window for the same day-type (weekday / Saturday / Sunday)
+- Baseline is a rolling 28-day window for the same day-type (weekday / Saturday / Sunday){baseline_age_note}
 
 TASK
 ----
