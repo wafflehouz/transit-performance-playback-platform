@@ -93,7 +93,7 @@ enriched = (
     path
     .withColumn(
         "h3_index",
-        F.expr("h3_longlatash3(lon, lat, 9)")
+        F.expr("h3_longlatash3(lon, lat, 9)").cast("string")
     )
     .withColumn(
         "time_bucket_15min",
