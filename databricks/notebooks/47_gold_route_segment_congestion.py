@@ -68,6 +68,10 @@ path = (
     spark.table(GOLD_TRIP_PATH_FACT)
     .filter(F.col("service_date") == F.lit(target_date).cast("date"))
     .filter(F.col("speed_mps").isNotNull())
+    # Exclude stationary points — buses stopped at scheduled stops produce
+    # 0 m/s readings that would dominate p10 and classify stops as severe
+    # congestion. VP_STATIONARY_THRESHOLD_MPS = 1.0 m/s matches notebook 44.
+    .filter(F.col("speed_mps") > VP_STATIONARY_THRESHOLD_MPS)
     .select("service_date", "trip_id", "point_ts", "lat", "lon", "speed_mps")
 )
 
