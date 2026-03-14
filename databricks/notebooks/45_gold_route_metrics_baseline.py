@@ -56,6 +56,34 @@ print(f"Building baseline using 28-day window ending {target_date} (exclusive)")
 
 window_start = (date.fromisoformat(target_date) - timedelta(days=28)).isoformat()
 
+# ── Check for recent GTFS schedule change and shrink window if needed ─────────
+# If a schedule change was detected within the last 28 days, using pre-change
+# data would corrupt the baseline (old + new schedule mixed → inflated stddev).
+# Shrink window_start to the change date so only post-change data is used.
+try:
+    version_log = spark.table(GOLD_GTFS_VERSION_LOG)
+    recent_reset = (
+        version_log
+        .filter(F.col("baseline_reset_recommended") == True)
+        .filter(F.col("detected_date") > F.lit(window_start).cast("date"))
+        .filter(F.col("detected_date") <  F.lit(target_date).cast("date"))
+        .orderBy(F.col("detected_date").desc())
+        .limit(1)
+        .collect()
+    )
+    if recent_reset:
+        reset_date   = recent_reset[0]["detected_date"].isoformat()
+        change_summary = recent_reset[0]["change_summary"]
+        print(f"⚠ GTFS schedule change detected on {reset_date}: {change_summary}")
+        print(f"  Shrinking baseline window: {window_start} → {reset_date}")
+        window_start = reset_date
+        print(f"  Baseline will use post-change data only ({window_start} → {target_date})")
+        print(f"  Note: sample_days will be lower than normal until {reset_date} + 28 days.")
+    else:
+        print(f"  No recent GTFS schedule change — using full 28-day window.")
+except Exception as e:
+    print(f"  ⚠ Could not check version log ({e}) — using default 28-day window.")
+
 print(f"Window: {window_start} → {target_date} (exclusive)")
 
 history = (
