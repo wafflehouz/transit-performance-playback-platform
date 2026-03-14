@@ -527,6 +527,25 @@ trips_shifted  = _pct_change(trip_count,  prev_trips)  > 1.0
 baseline_reset = is_new_download = needs_download and (routes_shifted or trips_shifted)
 
 # ── 6f: Append row ────────────────────────────────────────────────────────────
+_version_schema = StructType([
+    StructField("detected_date",              DT(),        nullable=False),
+    StructField("loaded_ts",                  TimestampType(), nullable=False),
+    StructField("feed_etag",                  ST(),        nullable=True),
+    StructField("feed_last_modified",         ST(),        nullable=True),
+    StructField("feed_version",               ST(),        nullable=True),
+    StructField("is_new_download",            BooleanType(), nullable=False),
+    StructField("route_count",                IT(),        nullable=False),
+    StructField("stop_count",                 IT(),        nullable=False),
+    StructField("trip_count",                 IT(),        nullable=False),
+    StructField("stop_time_count",            IT(),        nullable=False),
+    StructField("prev_route_count",           IT(),        nullable=True),
+    StructField("prev_stop_count",            IT(),        nullable=True),
+    StructField("prev_trip_count",            IT(),        nullable=True),
+    StructField("prev_stop_time_count",       IT(),        nullable=True),
+    StructField("change_summary",             ST(),        nullable=True),
+    StructField("baseline_reset_recommended", BooleanType(), nullable=False),
+])
+
 current_meta = _stored_meta()
 version_row = spark.createDataFrame([{
     "detected_date":              date.today(),
@@ -545,7 +564,7 @@ version_row = spark.createDataFrame([{
     "prev_stop_time_count":       int(prev_stop_times) if prev_stop_times is not None else None,
     "change_summary":             change_summary,
     "baseline_reset_recommended": bool(baseline_reset),
-}])
+}], schema=_version_schema)
 
 version_row.write.format("delta").mode("append").saveAsTable(GOLD_GTFS_VERSION_LOG)
 
