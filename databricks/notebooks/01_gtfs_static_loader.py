@@ -516,15 +516,32 @@ changes = [
 ]
 change_summary = " | ".join(c for c in changes if c) or "No count changes detected"
 
-# ── 6e: Baseline reset recommended when routes or trips shift ─────────────────
+# ── 6e: Baseline reset recommended ───────────────────────────────────────────
+# Primary signal: feed_version string change (authoritative — Valley Metro
+# publishes ~8 uploads/year including transitional ZIPs where old + new
+# schedules coexist under the same version string. Count-based detection
+# fires too early on those transitional uploads.)
+# Fallback: route/trip count shift >1% when feed_info.txt is absent.
+prev_feed_version = prev_row["feed_version"] if prev_row else None
+
 def _pct_change(curr, prev):
     if prev is None or prev == 0:
         return 0.0
     return abs(curr - prev) / prev * 100
 
-routes_shifted = _pct_change(route_count, prev_routes) > 1.0
-trips_shifted  = _pct_change(trip_count,  prev_trips)  > 1.0
-baseline_reset = is_new_download = needs_download and (routes_shifted or trips_shifted)
+if feed_version_str and prev_feed_version:
+    # Both present — version string change is the authoritative signal
+    baseline_reset = bool(needs_download and (feed_version_str != prev_feed_version))
+    if baseline_reset:
+        print(f"  Feed version changed: {prev_feed_version} → {feed_version_str}")
+    else:
+        print(f"  Feed version unchanged: {feed_version_str}")
+else:
+    # No feed_version available — fall back to count-based detection
+    routes_shifted = _pct_change(route_count, prev_routes) > 1.0
+    trips_shifted  = _pct_change(trip_count,  prev_trips)  > 1.0
+    baseline_reset = bool(needs_download and (routes_shifted or trips_shifted))
+    print(f"  No feed_version available — using count-based detection (fallback)")
 
 # ── 6f: Append row ────────────────────────────────────────────────────────────
 _version_schema = StructType([
