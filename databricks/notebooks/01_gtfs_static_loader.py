@@ -433,3 +433,131 @@ print("\nRoute type distribution:")
 )
 
 print(f"\n✓ GTFS Static Loader complete at {datetime.now(timezone.utc)} UTC")
+
+# COMMAND ----------
+
+# MAGIC %md ## Step 6 — GTFS Version Log
+
+# COMMAND ----------
+
+from pyspark.sql.types import (
+    StructType, StructField, StringType as ST, IntegerType as IT,
+    BooleanType, TimestampType, DateType as DT
+)
+from datetime import date
+
+# ── 6a: Read feed_info.txt for official feed_version if available ──────────────
+feed_info_path = f"{extract_dir}/feed_info.txt"
+feed_version_str = None
+if os.path.exists(feed_info_path):
+    try:
+        fi_df = spark.read.format("csv").option("header", "true").load(feed_info_path)
+        if "feed_version" in fi_df.columns:
+            feed_version_str = fi_df.select("feed_version").first()[0]
+            print(f"  feed_info.txt feed_version: {feed_version_str}")
+    except Exception as e:
+        print(f"  ⚠ Could not read feed_info.txt: {e}")
+
+# ── 6b: Create version log table if not exists ────────────────────────────────
+spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {GOLD_GTFS_VERSION_LOG} (
+        detected_date              DATE,
+        loaded_ts                  TIMESTAMP,
+        feed_etag                  STRING,
+        feed_last_modified         STRING,
+        feed_version               STRING,
+        is_new_download            BOOLEAN,
+        route_count                INT,
+        stop_count                 INT,
+        trip_count                 INT,
+        stop_time_count            INT,
+        prev_route_count           INT,
+        prev_stop_count            INT,
+        prev_trip_count            INT,
+        prev_stop_time_count       INT,
+        change_summary             STRING,
+        baseline_reset_recommended BOOLEAN
+    )
+    USING DELTA
+    TBLPROPERTIES (
+        'delta.autoOptimize.optimizeWrite' = 'true',
+        'delta.autoOptimize.autoCompact'   = 'true'
+    )
+""")
+
+# ── 6c: Read previous entry ───────────────────────────────────────────────────
+prev = (
+    spark.table(GOLD_GTFS_VERSION_LOG)
+    .orderBy(F.col("loaded_ts").desc())
+    .limit(1)
+    .collect()
+)
+prev_row        = prev[0] if prev else None
+prev_routes     = prev_row["route_count"]     if prev_row else None
+prev_stops      = prev_row["stop_count"]      if prev_row else None
+prev_trips      = prev_row["trip_count"]      if prev_row else None
+prev_stop_times = prev_row["stop_time_count"] if prev_row else None
+
+# ── 6d: Build change summary ──────────────────────────────────────────────────
+def _delta_str(label, curr, prev):
+    if prev is None:
+        return f"{label}: {curr:,} (first load)"
+    diff = curr - prev
+    if diff == 0:
+        return None
+    sign = "+" if diff > 0 else ""
+    return f"{label}: {prev:,} → {curr:,} ({sign}{diff:,})"
+
+changes = [
+    _delta_str("Routes",     route_count, prev_routes),
+    _delta_str("Stops",      stop_count,  prev_stops),
+    _delta_str("Trips",      trip_count,  prev_trips),
+    _delta_str("Stop times", stu_count,   prev_stop_times),
+]
+change_summary = " | ".join(c for c in changes if c) or "No count changes detected"
+
+# ── 6e: Baseline reset recommended when routes or trips shift ─────────────────
+def _pct_change(curr, prev):
+    if prev is None or prev == 0:
+        return 0.0
+    return abs(curr - prev) / prev * 100
+
+routes_shifted = _pct_change(route_count, prev_routes) > 1.0
+trips_shifted  = _pct_change(trip_count,  prev_trips)  > 1.0
+baseline_reset = is_new_download = needs_download and (routes_shifted or trips_shifted)
+
+# ── 6f: Append row ────────────────────────────────────────────────────────────
+current_meta = _stored_meta()
+version_row = spark.createDataFrame([{
+    "detected_date":              date.today(),
+    "loaded_ts":                  RUN_TS,
+    "feed_etag":                  current_meta.get("etag", ""),
+    "feed_last_modified":         current_meta.get("last_modified", ""),
+    "feed_version":               feed_version_str,
+    "is_new_download":            bool(needs_download),
+    "route_count":                int(route_count),
+    "stop_count":                 int(stop_count),
+    "trip_count":                 int(trip_count),
+    "stop_time_count":            int(stu_count),
+    "prev_route_count":           int(prev_routes)     if prev_routes     is not None else None,
+    "prev_stop_count":            int(prev_stops)      if prev_stops      is not None else None,
+    "prev_trip_count":            int(prev_trips)      if prev_trips      is not None else None,
+    "prev_stop_time_count":       int(prev_stop_times) if prev_stop_times is not None else None,
+    "change_summary":             change_summary,
+    "baseline_reset_recommended": bool(baseline_reset),
+}])
+
+version_row.write.format("delta").mode("append").saveAsTable(GOLD_GTFS_VERSION_LOG)
+
+# ── 6g: Summary output ────────────────────────────────────────────────────────
+print(f"\n=== GTFS Version Log Entry ===")
+print(f"  Date          : {date.today()}")
+print(f"  New download  : {needs_download}")
+print(f"  Feed version  : {feed_version_str or 'n/a (no feed_info.txt)'}")
+print(f"  ETag          : {current_meta.get('etag') or 'n/a'}")
+print(f"  Change summary: {change_summary}")
+print(f"  Baseline reset recommended: {baseline_reset}")
+
+if baseline_reset:
+    print("\n  ⚠ SCHEDULE CHANGE DETECTED — routes or trips shifted >1%.")
+    print("  Notebook 45 will reset the baseline window on next run.")
