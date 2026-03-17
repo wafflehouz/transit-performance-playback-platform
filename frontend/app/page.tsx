@@ -1,5 +1,2 @@
 import { redirect } from 'next/navigation'
-
-export default function RootPage() {
-  redirect('/grid')
-}
+export default function RootPage() { redirect('/live') }

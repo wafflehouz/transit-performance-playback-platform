@@ -9,24 +9,24 @@ import type { User } from '@supabase/supabase-js'
 
 const NAV = [
   {
-    href: '/grid',
-    label: 'Route Grid',
+    href: '/live',
+    label: 'Live Operations',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="w-5 h-5">
-        <rect x="3" y="3" width="7" height="7" rx="1" />
-        <rect x="14" y="3" width="7" height="7" rx="1" />
-        <rect x="3" y="14" width="7" height="7" rx="1" />
-        <rect x="14" y="14" width="7" height="7" rx="1" />
+        <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
+        <path strokeLinecap="round" d="M6.3 6.3a8 8 0 000 11.4M17.7 6.3a8 8 0 010 11.4" />
+        <path strokeLinecap="round" d="M9.2 9.2a4 4 0 000 5.6M14.8 9.2a4 4 0 010 5.6" />
       </svg>
     ),
   },
   {
-    href: '/playback',
-    label: 'GPS Playback',
+    href: '/otp',
+    label: 'On-Time Performance',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="w-5 h-5">
-        <circle cx="12" cy="12" r="9" />
-        <path d="M10 8l6 4-6 4V8z" fill="currentColor" stroke="none" />
+        <rect x="2" y="3" width="20" height="14" rx="2" />
+        <path strokeLinecap="round" d="M8 21h8M12 17v4" />
+        <path strokeLinecap="round" d="M6 8l3 3 3-3 3 3 3-3" />
       </svg>
     ),
   },
@@ -42,20 +42,33 @@ const NAV = [
     ),
   },
   {
-    href: '/incidents',
-    label: 'Incidents',
+    href: '/trip',
+    label: 'Trip Playback',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="w-5 h-5">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        <circle cx="12" cy="12" r="9" />
+        <path d="M10 8l6 4-6 4V8z" fill="currentColor" stroke="none" />
       </svg>
     ),
   },
   {
-    href: '/settings/subscriptions',
-    label: 'Subscriptions',
+    href: '/route',
+    label: 'Route Performance',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="w-5 h-5">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+        <rect x="3" y="3" width="7" height="7" rx="1" />
+        <rect x="14" y="3" width="7" height="7" rx="1" />
+        <rect x="3" y="14" width="7" height="7" rx="1" />
+        <rect x="14" y="14" width="7" height="7" rx="1" />
+      </svg>
+    ),
+  },
+  {
+    href: '/anomaly',
+    label: 'Anomaly Monitor',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="w-5 h-5">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
       </svg>
     ),
   },
@@ -81,30 +94,23 @@ export default function IconNav({ user }: { user: User }) {
         </svg>
       </div>
 
-      {/* Nav items */}
+      {/* Primary nav */}
       <nav className="flex flex-col items-center gap-1 flex-1">
         {NAV.map((item) => {
           const active = pathname.startsWith(item.href)
           return (
-            <NavIcon
-              key={item.href}
-              href={item.href}
-              label={item.label}
-              active={active}
-              onClick={active ? toggle : undefined}
-            >
+            <NavIcon key={item.href} href={item.href} label={item.label} active={active} onToggle={active ? toggle : undefined}>
               {item.icon}
             </NavIcon>
           )
         })}
       </nav>
 
-      {/* Bottom: filter toggle + settings + user */}
+      {/* Bottom: filter toggle + settings + avatar */}
       <div className="flex flex-col items-center gap-1 pb-1">
-        {/* Filter panel toggle */}
         <button
           onClick={toggle}
-          title={isOpen ? 'Hide filters' : 'Show filters'}
+          title={isOpen ? 'Collapse filters' : 'Expand filters'}
           className="w-10 h-10 rounded-lg flex items-center justify-center text-gray-500 hover:text-white hover:bg-gray-800 transition-colors"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="w-5 h-5">
@@ -112,59 +118,54 @@ export default function IconNav({ user }: { user: User }) {
           </svg>
         </button>
 
-        {/* Sign out */}
-        <button
-          onClick={handleSignOut}
-          title="Sign out"
-          className="w-10 h-10 rounded-lg flex items-center justify-center text-gray-500 hover:text-white hover:bg-gray-800 transition-colors"
+        <Link
+          href="/settings/subscriptions"
+          title="Settings"
+          className={cn(
+            'w-10 h-10 rounded-lg flex items-center justify-center transition-colors',
+            pathname.startsWith('/settings')
+              ? 'bg-blue-600/20 text-blue-400'
+              : 'text-gray-500 hover:text-white hover:bg-gray-800'
+          )}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="w-5 h-5">
-            <path strokeLinecap="round" d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
+            <path strokeLinecap="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <circle cx="12" cy="12" r="3" />
           </svg>
-        </button>
+        </Link>
 
-        {/* User avatar */}
-        <div
-          title={user.email}
-          className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-xs text-gray-300 mt-1"
+        <button
+          onClick={handleSignOut}
+          title={`Sign out (${user.email})`}
+          className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-xs text-gray-300 hover:bg-gray-600 transition-colors mt-1"
         >
           {user.email?.[0]?.toUpperCase() ?? '?'}
-        </div>
+        </button>
       </div>
     </aside>
   )
 }
 
 function NavIcon({
-  href,
-  label,
-  active,
-  children,
-  onClick,
+  href, label, active, children, onToggle,
 }: {
   href: string
   label: string
   active: boolean
   children: React.ReactNode
-  onClick?: () => void
+  onToggle?: () => void
 }) {
-  const pathname = usePathname()
-
-  if (active && onClick) {
+  if (active && onToggle) {
     return (
       <button
-        onClick={onClick}
+        onClick={onToggle}
         title={label}
-        className={cn(
-          'w-10 h-10 rounded-lg flex items-center justify-center transition-colors',
-          'bg-blue-600/20 text-blue-400'
-        )}
+        className="w-10 h-10 rounded-lg flex items-center justify-center transition-colors bg-blue-600/20 text-blue-400"
       >
         {children}
       </button>
     )
   }
-
   return (
     <Link
       href={href}
