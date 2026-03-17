@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useFilterPanel } from '@/lib/filter-panel-context'
-import { FilterSection, RouteFilter } from '@/components/ui/FilterControls'
-import LiveMap, { type LiveVehicle } from '@/components/map/LiveMap'
+import { FilterSection } from '@/components/ui/FilterControls'
+import LiveMap, { type LiveVehicle, type OtpStatus } from '@/components/map/LiveMap'
 import type { DimRoute } from '@/types'
 
 const RENDER_API = process.env.NEXT_PUBLIC_RENDER_API_URL ?? 'http://localhost:3001'
@@ -13,45 +13,77 @@ interface FeedResponse {
   route_id: string
   vehicle_count: number
   fetched_at: string | null
-  feed_ts: string | null
+  fetched_at_ms: number | null
   vehicles: LiveVehicle[]
+}
+
+// OTP color for legend/stats (matches LiveMap)
+const OTP_COLOR: Record<OtpStatus, string> = {
+  early:     '#ec4899',
+  on_time:   '#22c55e',
+  late:      '#f59e0b',
+  very_late: '#ef4444',
+  unknown:   '#6b7280',
 }
 
 export default function LivePageClient() {
   const { setContent } = useFilterPanel()
 
-  // Route selection — single route required
-  const [routes, setRoutes] = useState<DimRoute[]>([])
+  // Routes — populated immediately from Render, names enriched from Databricks
+  const [routeIds, setRouteIds] = useState<string[]>([])
+  const [routeNames, setRouteNames] = useState<Map<string, string>>(new Map())
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null)
 
-  // Feed data
+  // Feed
   const [feed, setFeed] = useState<FeedResponse | null>(null)
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Load route list from Databricks (one-time, small query)
+  // Step 1: get active route IDs from Render immediately (fast — already cached)
   useEffect(() => {
+    fetch(`${RENDER_API}/vehicles/routes`)
+      .then((r) => r.json())
+      .then((d: { route_ids: string[] }) => setRouteIds(d.route_ids ?? []))
+      .catch(() => {})
+  }, [])
+
+  // Step 2: enrich with human-readable names from Databricks in background
+  useEffect(() => {
+    if (routeIds.length === 0) return
     fetch('/api/databricks/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sql: `
-          SELECT DISTINCT route_id, route_short_name, route_long_name, route_type
+          SELECT route_id, route_short_name, route_long_name
           FROM silver_dim_route
-          ORDER BY
-            CASE WHEN route_short_name RLIKE '^[0-9]+$'
-                 THEN CAST(route_short_name AS INT) ELSE 9999 END,
-            route_short_name
+          WHERE route_id IN (${routeIds.map((id) => `'${id}'`).join(',')})
         `,
       }),
     })
       .then((r) => r.json())
-      .then((d) => setRoutes(d.rows ?? []))
+      .then((d: { rows: Array<{ route_id: string; route_short_name: string; route_long_name: string }> }) => {
+        const m = new Map<string, string>()
+        for (const row of d.rows ?? []) {
+          m.set(row.route_id, `${row.route_short_name} – ${row.route_long_name}`)
+        }
+        setRouteNames(m)
+      })
       .catch(() => {})
-  }, [])
+  }, [routeIds])
 
-  // Fetch vehicles from Render service
+  // Build display routes merging IDs + names
+  const routes: DimRoute[] = routeIds.map((id) => {
+    const name = routeNames.get(id)
+    return {
+      route_id: id,
+      route_short_name: id,
+      route_long_name: name ? name.split(' – ')[1] ?? '' : '',
+      route_type: 3,
+    }
+  })
+
+  // Fetch vehicles from Render
   const fetchVehicles = useCallback(async (routeId: string) => {
     try {
       const res = await fetch(`${RENDER_API}/vehicles?route_id=${encodeURIComponent(routeId)}`)
@@ -60,22 +92,25 @@ export default function LivePageClient() {
       setFeed(data)
       setError(null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to reach live feed')
-    } finally {
-      setLoading(false)
+      setError(e instanceof Error ? e.message : 'Feed unavailable')
     }
   }, [])
 
-  // Start/restart polling when route changes
+  // Start/restart polling on route change
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current)
     if (!selectedRouteId) { setFeed(null); return }
 
-    setLoading(true)
     fetchVehicles(selectedRouteId)
     timerRef.current = setInterval(() => fetchVehicles(selectedRouteId), REFRESH_MS)
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [selectedRouteId, fetchVehicles])
+
+  // OTP summary counts
+  const otpCounts = feed?.vehicles.reduce(
+    (acc, v) => { acc[v.otp_status] = (acc[v.otp_status] ?? 0) + 1; return acc },
+    {} as Partial<Record<OtpStatus, number>>
+  ) ?? {}
 
   const selectedRoute = routes.find((r) => r.route_id === selectedRouteId)
 
@@ -86,16 +121,14 @@ export default function LivePageClient() {
         routes={routes}
         selectedRouteId={selectedRouteId}
         onSelect={setSelectedRouteId}
-        feed={feed}
-        onRefresh={() => selectedRouteId && fetchVehicles(selectedRouteId)}
       />
     )
-  }, [routes, selectedRouteId, feed, fetchVehicles, setContent])
+  }, [routes, selectedRouteId, setContent])
 
   return (
     <div className="flex flex-col h-full relative">
 
-      {/* No route selected — prompt */}
+      {/* Empty state */}
       {!selectedRouteId && (
         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
           <div className="bg-gray-900/90 border border-gray-700 rounded-2xl px-8 py-6 text-center backdrop-blur-sm shadow-2xl">
@@ -106,15 +139,15 @@ export default function LivePageClient() {
               </svg>
             </div>
             <p className="text-white font-semibold mb-1">Select a route to begin</p>
-            <p className="text-gray-400 text-sm">Use the Filters panel to choose a route</p>
+            <p className="text-gray-400 text-sm">Use the Filters panel on the left</p>
           </div>
         </div>
       )}
 
-      {/* Stats overlay — shown when route selected */}
+      {/* Stats overlay */}
       {feed && selectedRoute && (
-        <div className="absolute top-4 right-4 z-10 bg-gray-900/95 border border-gray-700 rounded-xl shadow-2xl p-4 w-60 backdrop-blur-sm">
-          <div className="flex items-center justify-between mb-2">
+        <div className="absolute top-4 right-4 z-10 bg-gray-900/95 border border-gray-700 rounded-xl shadow-2xl p-4 w-64 backdrop-blur-sm">
+          <div className="flex items-center justify-between mb-1">
             <span className="text-white font-semibold text-sm">
               Route {selectedRoute.route_short_name}
             </span>
@@ -123,114 +156,120 @@ export default function LivePageClient() {
               <span className="text-emerald-400 text-xs">Live</span>
             </span>
           </div>
-          <p className="text-gray-500 text-xs mb-3 leading-snug truncate">
-            {selectedRoute.route_long_name}
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            <StatCard label="Vehicles" value={String(feed.vehicle_count)} />
-            <StatCard
-              label="Updated"
-              value={
-                feed.fetched_at
-                  ? new Date(feed.fetched_at).toLocaleTimeString('en-US', {
-                      hour: '2-digit', minute: '2-digit', timeZone: 'America/Phoenix',
-                    })
-                  : '—'
-              }
-            />
+          {selectedRoute.route_long_name && (
+            <p className="text-gray-500 text-xs mb-3 truncate">{selectedRoute.route_long_name}</p>
+          )}
+
+          {/* OTP breakdown */}
+          <div className="space-y-1.5">
+            {([
+              ['on_time',   'On Time'],
+              ['late',      'Late'],
+              ['very_late', 'Very Late'],
+              ['early',     'Early'],
+              ['unknown',   'No Data'],
+            ] as [OtpStatus, string][]).map(([status, label]) => {
+              const count = otpCounts[status] ?? 0
+              if (count === 0) return null
+              return (
+                <div key={status} className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full" style={{ background: OTP_COLOR[status] }} />
+                    <span className="text-gray-300">{label}</span>
+                  </div>
+                  <span className="text-white font-medium">
+                    {count} ({Math.round((count / feed.vehicle_count) * 100)}%)
+                  </span>
+                </div>
+              )
+            })}
           </div>
+
           {error && <p className="text-red-400 text-xs mt-2">{error}</p>}
         </div>
       )}
 
-      {/* Speed legend */}
+      {/* OTP legend — bottom right */}
       {selectedRouteId && (
-        <div className="absolute bottom-8 right-4 z-10 bg-gray-900/90 border border-gray-700 rounded-lg px-3 py-2 backdrop-blur-sm">
-          <p className="text-gray-400 text-[10px] uppercase tracking-wider mb-1.5">Speed</p>
-          <div className="space-y-1">
-            {[
-              { color: 'bg-emerald-500', label: '> 18 mph' },
-              { color: 'bg-amber-400',   label: '8 – 18 mph' },
-              { color: 'bg-orange-500',  label: '1 – 8 mph' },
-              { color: 'bg-red-500',     label: 'Stopped' },
-              { color: 'bg-gray-500',    label: 'Unknown' },
-            ].map((i) => (
-              <div key={i.label} className="flex items-center gap-2">
-                <div className={`w-2.5 h-2.5 rounded-full ${i.color}`} />
-                <span className="text-gray-300 text-xs">{i.label}</span>
+        <div className="absolute bottom-8 right-4 z-10 bg-gray-900/90 border border-gray-700 rounded-lg px-3 py-2.5 backdrop-blur-sm">
+          <p className="text-gray-500 text-[10px] uppercase tracking-wider mb-2">On-Time Status</p>
+          <div className="space-y-1.5">
+            {([
+              ['on_time',   'On Time'],
+              ['early',     'Early'],
+              ['late',      'Late (1–10 min)'],
+              ['very_late', 'Very Late (10+ min)'],
+              ['unknown',   'No schedule data'],
+            ] as [OtpStatus, string][]).map(([status, label]) => (
+              <div key={status} className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: OTP_COLOR[status] }} />
+                <span className="text-gray-300 text-xs">{label}</span>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Map — always rendered, vehicles empty until route selected */}
-      <LiveMap
-        vehicles={feed?.vehicles ?? []}
-        loading={loading && !!selectedRouteId}
-      />
+      <LiveMap vehicles={feed?.vehicles ?? []} fetchedAtMs={feed?.fetched_at_ms ?? null} />
     </div>
   )
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-gray-800 rounded-lg px-3 py-2">
-      <div className="text-gray-400 text-xs">{label}</div>
-      <div className="text-white font-medium text-sm">{value}</div>
-    </div>
-  )
-}
+// ── Filter panel ───────────────────────────────────────────────────────────────
 
 function LiveFilters({
-  routes, selectedRouteId, onSelect, feed, onRefresh,
+  routes, selectedRouteId, onSelect,
 }: {
   routes: DimRoute[]
   selectedRouteId: string | null
   onSelect: (id: string | null) => void
-  feed: FeedResponse | null
-  onRefresh: () => void
 }) {
-  // Wrap as single-select: pass array in, extract first element out
-  const selected = selectedRouteId ? [selectedRouteId] : []
-  function handleChange(ids: string[]) {
-    // Single select — take the most recently added id
-    const next = ids.find((id) => id !== selectedRouteId) ?? null
-    onSelect(next)
-  }
+  const [search, setSearch] = useState('')
+
+  const filtered = routes.filter((r) => {
+    const q = search.toLowerCase()
+    return r.route_short_name.toLowerCase().includes(q) ||
+      r.route_long_name.toLowerCase().includes(q)
+  })
 
   return (
-    <>
-      <FilterSection label="Route (required)">
-        <RouteFilter
-          routes={routes}
-          selected={selected}
-          onChange={handleChange}
-        />
-        {selectedRouteId && (
+    <FilterSection label={`Route ${routes.length > 0 ? `(${routes.length} active)` : '—'}`}>
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search routes…"
+        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-2"
+      />
+      <div className="space-y-0.5 max-h-80 overflow-y-auto">
+        {filtered.map((r) => (
           <button
-            onClick={() => onSelect(null)}
-            className="w-full text-xs text-gray-500 hover:text-gray-300 transition-colors mt-1"
+            key={r.route_id}
+            onClick={() => onSelect(r.route_id === selectedRouteId ? null : r.route_id)}
+            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
+              r.route_id === selectedRouteId
+                ? 'bg-blue-600/20 text-blue-300'
+                : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+            }`}
           >
-            Clear route
+            <span className="font-semibold w-8 shrink-0">{r.route_short_name}</span>
+            {r.route_long_name && (
+              <span className="text-gray-500 text-xs truncate">{r.route_long_name}</span>
+            )}
           </button>
+        ))}
+        {filtered.length === 0 && (
+          <p className="text-gray-600 text-xs text-center py-3">No routes found</p>
         )}
-      </FilterSection>
-
-      {feed && (
-        <FilterSection label="Feed">
-          <button
-            onClick={onRefresh}
-            className="w-full flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white transition-colors"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4">
-              <path strokeLinecap="round" d="M4 4v5h5M20 20v-5h-5M4 9a8 8 0 0114.7-2.7M20 15a8 8 0 01-14.7 2.7" />
-            </svg>
-            Refresh now
-          </button>
-          <p className="text-gray-500 text-xs text-center">Auto-refreshes every 30s</p>
-        </FilterSection>
+      </div>
+      {selectedRouteId && (
+        <button
+          onClick={() => onSelect(null)}
+          className="w-full text-xs text-gray-500 hover:text-gray-300 transition-colors mt-2"
+        >
+          Clear selection
+        </button>
       )}
-    </>
+    </FilterSection>
   )
 }

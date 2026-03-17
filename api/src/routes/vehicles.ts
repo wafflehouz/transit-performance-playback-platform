@@ -28,6 +28,7 @@ router.get('/', (req: Request, res: Response) => {
     route_id: routeId,
     vehicle_count: vehicles.length,
     fetched_at: status.fetched_at,
+    fetched_at_ms: status.fetched_at_ms,
     feed_ts: status.feed_ts,
     vehicles,
   })
