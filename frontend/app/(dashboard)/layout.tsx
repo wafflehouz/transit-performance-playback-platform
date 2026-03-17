@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import Sidebar from '@/components/ui/Sidebar'
+import { FilterPanelProvider } from '@/lib/filter-panel-context'
+import IconNav from '@/components/ui/IconNav'
+import FilterPanel from '@/components/ui/FilterPanel'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -9,9 +11,17 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (!user) redirect('/login')
 
   return (
-    <div className="flex h-screen bg-gray-950 text-white overflow-hidden">
-      <Sidebar user={user} />
-      <main className="flex-1 overflow-auto">{children}</main>
-    </div>
+    <FilterPanelProvider>
+      <div className="flex h-screen bg-gray-950 text-white overflow-hidden">
+        {/* Narrow icon nav */}
+        <IconNav user={user} />
+
+        {/* Filter slideout — content injected by each page */}
+        <FilterPanel />
+
+        {/* Main content */}
+        <main className="flex-1 overflow-auto min-w-0">{children}</main>
+      </div>
+    </FilterPanelProvider>
   )
 }

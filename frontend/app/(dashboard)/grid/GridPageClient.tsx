@@ -1,10 +1,16 @@
 'use client'
 
-import { useState, useEffect, useTransition } from 'react'
+import { useState, useEffect, useTransition, useCallback } from 'react'
+import { useFilterPanel } from '@/lib/filter-panel-context'
+import {
+  FilterSection,
+  DateFilter,
+  DirectionFilter,
+  RouteFilter,
+} from '@/components/ui/FilterControls'
 import RouteGrid from '@/components/grid/RouteGrid'
 import type { RouteMetrics15Min, DimRoute } from '@/types'
 
-// Default to yesterday (most recent complete service date)
 function defaultDate(): string {
   const d = new Date()
   d.setDate(d.getDate() - 1)
@@ -12,8 +18,11 @@ function defaultDate(): string {
 }
 
 export default function GridPageClient() {
+  const { setContent } = useFilterPanel()
+
   const [date, setDate] = useState(defaultDate)
   const [directionFilter, setDirectionFilter] = useState<0 | 1 | 'both'>('both')
+  const [selectedRoutes, setSelectedRoutes] = useState<string[]>([])
   const [metrics, setMetrics] = useState<RouteMetrics15Min[]>([])
   const [routes, setRoutes] = useState<DimRoute[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -41,82 +50,80 @@ export default function GridPageClient() {
       .catch(() => setError('Failed to load routes'))
   }, [])
 
-  // Load metrics when date changes
-  useEffect(() => {
-    setError(null)
-    startTransition(() => {
-      fetch('/api/databricks/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sql: `
-            SELECT
-              service_date,
-              route_id,
-              direction_id,
-              time_bucket_15min,
-              trip_count,
-              COALESCE(avg_delay_seconds, 0)  AS avg_delay_seconds,
-              COALESCE(p90_delay_seconds, 0)  AS p90_delay_seconds,
-              COALESCE(pct_on_time, 1.0)      AS pct_on_time,
-              avg_dwell_delta_seconds,
-              avg_late_start_seconds
-            FROM gold_route_metrics_15min
-            WHERE service_date = :serviceDate
-            ORDER BY route_id, direction_id, time_bucket_15min
-          `,
-          params: { serviceDate: date },
-        }),
-      })
-        .then((r) => r.json())
-        .then((d) => {
-          if (d.error) throw new Error(d.error)
-          setMetrics(d.rows ?? [])
+  // Fetch metrics when filters change
+  const fetchMetrics = useCallback(
+    (d: string, rIds: string[]) => {
+      setError(null)
+      const routeFilter =
+        rIds.length > 0
+          ? `AND route_id IN (${rIds.map((r) => `'${r.replace(/'/g, "''")}'`).join(', ')})`
+          : ''
+
+      startTransition(() => {
+        fetch('/api/databricks/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sql: `
+              SELECT
+                service_date, route_id, direction_id, time_bucket_15min,
+                trip_count,
+                COALESCE(avg_delay_seconds, 0)  AS avg_delay_seconds,
+                COALESCE(p90_delay_seconds, 0)  AS p90_delay_seconds,
+                COALESCE(pct_on_time, 1.0)      AS pct_on_time,
+                avg_dwell_delta_seconds,
+                avg_late_start_seconds
+              FROM gold_route_metrics_15min
+              WHERE service_date = :serviceDate
+              ${routeFilter}
+              ORDER BY route_id, direction_id, time_bucket_15min
+            `,
+            params: { serviceDate: d },
+          }),
         })
-        .catch((e) => setError(e.message))
-    })
-  }, [date])
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.error) throw new Error(data.error)
+            setMetrics(data.rows ?? [])
+          })
+          .catch((e) => setError(e.message))
+      })
+    },
+    []
+  )
+
+  useEffect(() => {
+    fetchMetrics(date, selectedRoutes)
+  }, [date, selectedRoutes, fetchMetrics])
+
+  // Inject filter panel content
+  useEffect(() => {
+    setContent(
+      <GridFilters
+        date={date}
+        setDate={setDate}
+        direction={directionFilter}
+        setDirection={setDirectionFilter}
+        selectedRoutes={selectedRoutes}
+        setSelectedRoutes={setSelectedRoutes}
+        routes={routes}
+      />
+    )
+  }, [date, directionFilter, selectedRoutes, routes, setContent])
 
   return (
     <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-4 flex-wrap">
+      {/* Page header */}
+      <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-white">Route Grid</h1>
-          <p className="text-gray-400 text-xs mt-0.5">
-            {routes.length > 0 ? `${routes.length} routes` : 'Loading routes…'}
-            {isPending ? ' · Fetching…' : metrics.length > 0 ? ` · ${metrics.length} metric rows` : ''}
+          <h1 className="text-base font-semibold text-white">Route Grid</h1>
+          <p className="text-gray-500 text-xs mt-0.5">
+            {isPending
+              ? 'Loading…'
+              : metrics.length > 0
+              ? `${new Set(metrics.map((m) => m.route_id)).size} routes · ${date}`
+              : `No data for ${date}`}
           </p>
-        </div>
-
-        <div className="flex items-center gap-3 ml-auto">
-          {/* Date picker */}
-          <div className="flex items-center gap-2">
-            <label className="text-gray-400 text-xs">Date</label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          {/* Direction filter */}
-          <div className="flex rounded-lg overflow-hidden border border-gray-700">
-            {(['both', 0, 1] as const).map((d) => (
-              <button
-                key={String(d)}
-                onClick={() => setDirectionFilter(d)}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  directionFilter === d
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:text-white'
-                }`}
-              >
-                {d === 'both' ? 'Both dirs' : d === 0 ? 'Outbound' : 'Inbound'}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -127,20 +134,58 @@ export default function GridPageClient() {
             {error}
           </div>
         ) : isPending ? (
-          <div className="space-y-1 animate-pulse">
-            {Array.from({ length: 12 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-px">
-                <div className="w-28 h-7 bg-gray-800 rounded shrink-0 mr-2" />
-                {Array.from({ length: 40 }).map((_, j) => (
-                  <div key={j} className="flex-1 min-w-[20px] h-7 bg-gray-800/50 rounded-sm" />
-                ))}
-              </div>
-            ))}
-          </div>
+          <GridSkeleton />
         ) : (
           <RouteGrid metrics={metrics} routes={routes} directionFilter={directionFilter} />
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Filter panel content ────────────────────────────────────────────────────────
+function GridFilters({
+  date, setDate,
+  direction, setDirection,
+  selectedRoutes, setSelectedRoutes,
+  routes,
+}: {
+  date: string
+  setDate: (v: string) => void
+  direction: 0 | 1 | 'both'
+  setDirection: (v: 0 | 1 | 'both') => void
+  selectedRoutes: string[]
+  setSelectedRoutes: (v: string[]) => void
+  routes: DimRoute[]
+}) {
+  return (
+    <>
+      <FilterSection label="Service Date">
+        <DateFilter value={date} onChange={setDate} />
+      </FilterSection>
+
+      <FilterSection label="Direction">
+        <DirectionFilter value={direction} onChange={setDirection} />
+      </FilterSection>
+
+      <FilterSection label="Route(s)">
+        <RouteFilter routes={routes} selected={selectedRoutes} onChange={setSelectedRoutes} />
+      </FilterSection>
+    </>
+  )
+}
+
+function GridSkeleton() {
+  return (
+    <div className="space-y-1 animate-pulse">
+      {Array.from({ length: 14 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-px">
+          <div className="w-28 h-7 bg-gray-800 rounded shrink-0 mr-2" />
+          {Array.from({ length: 40 }).map((_, j) => (
+            <div key={j} className="flex-1 min-w-[20px] h-7 bg-gray-800/50 rounded-sm" />
+          ))}
+        </div>
+      ))}
     </div>
   )
 }
