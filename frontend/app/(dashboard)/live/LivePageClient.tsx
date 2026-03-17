@@ -28,6 +28,8 @@ const OTP_COLOR: Record<OtpStatus, string> = {
 
 export default function LivePageClient() {
   const { setContent } = useFilterPanel()
+  const setContentRef = useRef(setContent)
+  setContentRef.current = setContent
 
   // Routes — populated immediately from Render, names enriched from Databricks
   const [routeIds, setRouteIds] = useState<string[]>([])
@@ -114,16 +116,16 @@ export default function LivePageClient() {
 
   const selectedRoute = routes.find((r) => r.route_id === selectedRouteId)
 
-  // Inject filter panel
+  // Inject filter panel — use ref so setContent never appears in deps
   useEffect(() => {
-    setContent(
+    setContentRef.current(
       <LiveFilters
         routes={routes}
         selectedRouteId={selectedRouteId}
         onSelect={setSelectedRouteId}
       />
     )
-  }, [routes, selectedRouteId, setContent])
+  }, [routes, selectedRouteId])
 
   return (
     <div className="flex flex-col h-full relative">
@@ -189,28 +191,7 @@ export default function LivePageClient() {
         </div>
       )}
 
-      {/* OTP legend — bottom right */}
-      {selectedRouteId && (
-        <div className="absolute bottom-8 right-4 z-10 bg-gray-900/90 border border-gray-700 rounded-lg px-3 py-2.5 backdrop-blur-sm">
-          <p className="text-gray-500 text-[10px] uppercase tracking-wider mb-2">On-Time Status</p>
-          <div className="space-y-1.5">
-            {([
-              ['on_time',   'On Time'],
-              ['early',     'Early'],
-              ['late',      'Late (1–10 min)'],
-              ['very_late', 'Very Late (10+ min)'],
-              ['unknown',   'No schedule data'],
-            ] as [OtpStatus, string][]).map(([status, label]) => (
-              <div key={status} className="flex items-center gap-2">
-                <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: OTP_COLOR[status] }} />
-                <span className="text-gray-300 text-xs">{label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <LiveMap vehicles={feed?.vehicles ?? []} fetchedAtMs={feed?.fetched_at_ms ?? null} />
+<LiveMap vehicles={feed?.vehicles ?? []} fetchedAtMs={feed?.fetched_at_ms ?? null} />
     </div>
   )
 }

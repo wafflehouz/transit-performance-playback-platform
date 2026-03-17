@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useTransition, useCallback } from 'react'
+import { useState, useEffect, useTransition, useCallback, useRef } from 'react'
 import { useFilterPanel } from '@/lib/filter-panel-context'
 import {
   FilterSection,
@@ -19,6 +19,8 @@ function defaultDate(): string {
 
 export default function GridPageClient() {
   const { setContent } = useFilterPanel()
+  const setContentRef = useRef(setContent)
+  setContentRef.current = setContent
 
   const [date, setDate] = useState(defaultDate)
   const [directionFilter, setDirectionFilter] = useState<0 | 1 | 'both'>('both')
@@ -96,9 +98,9 @@ export default function GridPageClient() {
     fetchMetrics(date, selectedRoutes)
   }, [date, selectedRoutes, fetchMetrics])
 
-  // Inject filter panel content
+  // Inject filter panel content — ref avoids setContent in deps
   useEffect(() => {
-    setContent(
+    setContentRef.current(
       <GridFilters
         date={date}
         setDate={setDate}
@@ -109,7 +111,7 @@ export default function GridPageClient() {
         routes={routes}
       />
     )
-  }, [date, directionFilter, selectedRoutes, routes, setContent])
+  }, [date, directionFilter, selectedRoutes, routes])
 
   return (
     <div className="flex flex-col h-full">
