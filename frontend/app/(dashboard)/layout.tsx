@@ -20,7 +20,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <FilterPanel />
 
         {/* Main content */}
-        <main className="flex-1 overflow-auto min-w-0">{children}</main>
+        <main className="flex-1 overflow-hidden min-w-0 flex flex-col">{children}</main>
       </div>
     </FilterPanelProvider>
   )
