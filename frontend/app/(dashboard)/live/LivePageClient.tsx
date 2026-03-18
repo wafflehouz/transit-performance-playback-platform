@@ -9,20 +9,36 @@ import type { DimRoute, RouteStop } from '@/types'
 const RENDER_API = process.env.NEXT_PUBLIC_RENDER_API_URL ?? 'http://localhost:3001'
 const REFRESH_MS = 30_000
 
-// Curated display colors for Valley Metro — designed for contrast on light map.
-// Keyed by GTFS route_type (0=tram, 1=metro rail, 2=rail, 3=bus, 4=ferry, 5=cable, 12=monorail).
-// Valley Metro network: most routes are bus (type 3), plus light rail (1), PHX Sky Train (2),
-// and Tempe Streetcar (0).
-const VM_ROUTE_COLORS: Record<number, string> = {
-  0: '#0891B2',  // Tempe Streetcar — cyan
-  1: '#DC2626',  // Valley Metro Rail (light rail) — red
-  2: '#D97706',  // PHX Sky Train — amber
-  3: '#6D28D9',  // Local/Rapid bus — deep violet
+// Curated display colors for Valley Metro — optimised for contrast on light map
+// without straying far from agency branding.
+//
+// Name-based overrides take priority (for lines that share a route_type but differ visually).
+// Falls back to type-based color, then default bus violet.
+const VM_NAME_COLORS: Record<string, string> = {
+  'A':    '#EA580C',  // METRO A Line — orange  (Valley Metro orange brand)
+  'B':    '#2563EB',  // METRO B Line — blue
+  'LINK': '#7C3AED',  // METRO LINK connector
+  'PHX':  '#0284C7',  // PHX Sky Train — sky blue
+  'GOLD': '#D97706',  // Orbit Gold / Tempe circulator variants
+  'RED':  '#DC2626',
+  'BLUE': '#2563EB',
 }
+
+const VM_TYPE_COLORS: Record<number, string> = {
+  0: '#0D9488',  // Tram / streetcar (Tempe Streetcar) — teal
+  1: '#EA580C',  // Metro light rail (default, overridden per line above) — orange
+  2: '#0284C7',  // Rail / commuter — sky blue
+  3: '#6D28D9',  // Local & Rapid bus — deep violet
+}
+
 const FALLBACK_ROUTE_COLOR = '#6D28D9'
 
-function getCuratedColor(routeType: number): string {
-  return VM_ROUTE_COLORS[routeType] ?? FALLBACK_ROUTE_COLOR
+function getCuratedColor(routeType: number, routeShortName?: string): string {
+  if (routeShortName) {
+    const nameKey = routeShortName.toUpperCase().trim()
+    if (VM_NAME_COLORS[nameKey]) return VM_NAME_COLORS[nameKey]
+  }
+  return VM_TYPE_COLORS[routeType] ?? FALLBACK_ROUTE_COLOR
 }
 
 interface FeedResponse {
@@ -292,7 +308,10 @@ export default function LivePageClient() {
   vehicles={feed?.vehicles ?? []}
   fetchedAtMs={feed?.fetched_at_ms ?? null}
   routeStops={routeStops}
-  routeColor={selectedRouteId ? getCuratedColor(routeTypes.get(selectedRouteId) ?? 3) : null}
+  routeColor={selectedRouteId ? getCuratedColor(
+    routeTypes.get(selectedRouteId) ?? 3,
+    routes.find(r => r.route_id === selectedRouteId)?.route_short_name
+  ) : null}
 />
     </div>
   )
