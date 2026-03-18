@@ -25,6 +25,7 @@ interface Props {
   vehicles: LiveVehicle[]
   fetchedAtMs: number | null  // epoch ms when vehicles were fetched — for dead reckoning
   routeStops: Array<RouteStop & { point_type?: string }>
+  routeColor: string | null   // GTFS route_color (#RRGGBB) — null falls back to default
 }
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY!
@@ -70,7 +71,9 @@ function deadReckon(
 
 // ── Map component ──────────────────────────────────────────────────────────────
 
-export default function LiveMap({ vehicles, fetchedAtMs, routeStops }: Props) {
+const DEFAULT_ROUTE_COLOR = '#38bdf8'
+
+export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MaplibreMap | null>(null)
   const popupRef = useRef<Popup | null>(null)
@@ -353,6 +356,16 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops }: Props) {
     lineSrc?.setData({ type: 'FeatureCollection', features: lineFeatures })
     stopSrc?.setData({ type: 'FeatureCollection', features: stopFeatures })
   }, [mapReady, routeStops])
+
+  // Update route line + stop colors when route changes
+  useEffect(() => {
+    if (!mapReady) return
+    const map = mapRef.current
+    if (!map) return
+    const color = routeColor ?? DEFAULT_ROUTE_COLOR
+    map.setPaintProperty('route-line-fill', 'line-color', color)
+    map.setPaintProperty('stop-circles', 'circle-stroke-color', color)
+  }, [mapReady, routeColor])
 
   // Dead reckoning — update positions every second
   useEffect(() => {

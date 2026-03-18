@@ -31,9 +31,10 @@ export default function LivePageClient() {
   const setContentRef = useRef(setContent)
   setContentRef.current = setContent
 
-  // Routes — populated immediately from Render, names enriched from Databricks
+  // Routes — populated immediately from Render, names/colors enriched from Databricks
   const [routeIds, setRouteIds] = useState<string[]>([])
   const [routeNames, setRouteNames] = useState<Map<string, string>>(new Map())
+  const [routeColors, setRouteColors] = useState<Map<string, string>>(new Map())
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null)
 
   // Feed
@@ -130,19 +131,22 @@ export default function LivePageClient() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sql: `
-          SELECT route_id, route_short_name, route_long_name
+          SELECT route_id, route_short_name, route_long_name, route_color
           FROM silver_dim_route
           WHERE route_id IN (${routeIds.map((id) => `'${id}'`).join(',')})
         `,
       }),
     })
       .then((r) => r.json())
-      .then((d: { rows: Array<{ route_id: string; route_short_name: string; route_long_name: string }> }) => {
-        const m = new Map<string, string>()
+      .then((d: { rows: Array<{ route_id: string; route_short_name: string; route_long_name: string; route_color: string | null }> }) => {
+        const names = new Map<string, string>()
+        const colors = new Map<string, string>()
         for (const row of d.rows ?? []) {
-          m.set(row.route_id, `${row.route_short_name} – ${row.route_long_name}`)
+          names.set(row.route_id, `${row.route_short_name} – ${row.route_long_name}`)
+          if (row.route_color) colors.set(row.route_id, `#${row.route_color}`)
         }
-        setRouteNames(m)
+        setRouteNames(names)
+        setRouteColors(colors)
       })
       .catch(() => {})
   }, [routeIds])
@@ -268,7 +272,12 @@ export default function LivePageClient() {
         </div>
       )}
 
-<LiveMap vehicles={feed?.vehicles ?? []} fetchedAtMs={feed?.fetched_at_ms ?? null} routeStops={routeStops} />
+<LiveMap
+  vehicles={feed?.vehicles ?? []}
+  fetchedAtMs={feed?.fetched_at_ms ?? null}
+  routeStops={routeStops}
+  routeColor={selectedRouteId ? (routeColors.get(selectedRouteId) ?? null) : null}
+/>
     </div>
   )
 }
