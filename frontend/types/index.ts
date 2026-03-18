@@ -69,6 +69,15 @@ export interface DimRoute {
   route_type: number
 }
 
+export interface RouteStop {
+  stop_sequence: number
+  stop_id: string
+  stop_name: string | null
+  lat: number
+  lon: number
+  direction_id: number
+}
+
 // ── Supabase table shapes ──────────────────────────────────────────────────────
 
 export interface RouteSubscription {

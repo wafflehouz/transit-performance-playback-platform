@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { Map as MaplibreMap, Popup } from 'maplibre-gl'
+import type { RouteStop } from '@/types'
 
 export type OtpStatus = 'early' | 'on_time' | 'late' | 'very_late' | 'unknown'
 
@@ -23,6 +24,7 @@ export interface LiveVehicle {
 interface Props {
   vehicles: LiveVehicle[]
   fetchedAtMs: number | null  // epoch ms when vehicles were fetched — for dead reckoning
+  routeStops: Array<RouteStop & { point_type?: string }>
 }
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY!
@@ -56,9 +58,9 @@ function deadReckon(
   bearing: number | null, speed_mps: number | null,
   elapsedSeconds: number
 ): [number, number] {
-  if (!bearing || !speed_mps || speed_mps < 0.5) return [lat, lon]
-  // Cap interpolation at 60s to avoid runaway positions
-  const dt = Math.min(elapsedSeconds, 60)
+  if (!bearing || !speed_mps || speed_mps < 1.5) return [lat, lon]
+  // Cap interpolation at 15s to avoid drift on curves
+  const dt = Math.min(elapsedSeconds, 15)
   const bearingRad = (bearing * Math.PI) / 180
   const distM = speed_mps * dt
   const deltaLat = (distM * Math.cos(bearingRad)) / 111_111
@@ -68,7 +70,7 @@ function deadReckon(
 
 // ── Map component ──────────────────────────────────────────────────────────────
 
-export default function LiveMap({ vehicles, fetchedAtMs }: Props) {
+export default function LiveMap({ vehicles, fetchedAtMs, routeStops }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MaplibreMap | null>(null)
   const popupRef = useRef<Popup | null>(null)
@@ -190,6 +192,74 @@ export default function LiveMap({ vehicles, fetchedAtMs }: Props) {
         ctx.fill()
         map.addImage('bearing-arrow', { width: size, height: size, data: new Uint8Array(ctx.getImageData(0, 0, size, size).data) })
 
+        // Route shape + stops
+        map.addSource('route-line', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        })
+        map.addSource('route-stops', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        })
+
+        // Route line — white casing + colored fill so it's distinct from stop dots
+        map.addLayer({
+          id: 'route-line-casing',
+          type: 'line',
+          source: 'route-line',
+          paint: {
+            'line-color': '#1e293b',
+            'line-width': ['interpolate', ['linear'], ['zoom'], 9, 5, 13, 8],
+            'line-opacity': 0.8,
+          },
+        }, 'veh-glow')
+
+        map.addLayer({
+          id: 'route-line-fill',
+          type: 'line',
+          source: 'route-line',
+          paint: {
+            'line-color': '#38bdf8',
+            'line-width': ['interpolate', ['linear'], ['zoom'], 9, 3, 13, 5],
+            'line-opacity': 0.75,
+          },
+        }, 'veh-glow')
+
+        // Stop circles — rendered above the line
+        map.addLayer({
+          id: 'stop-circles',
+          type: 'circle',
+          source: 'route-stops',
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 3, 14, 6],
+            'circle-color': '#0f172a',
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#38bdf8',
+            'circle-opacity': 1,
+          },
+        }, 'veh-glow')
+
+        // Stop name labels at zoom 14+
+        map.addLayer({
+          id: 'stop-labels',
+          type: 'symbol',
+          source: 'route-stops',
+          minzoom: 14,
+          layout: {
+            'text-field': ['coalesce', ['get', 'stop_name'], ['get', 'stop_id']],
+            'text-size': 10,
+            'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+            'text-offset': [0, 1.4],
+            'text-anchor': 'top',
+            'text-allow-overlap': false,
+          },
+          paint: {
+            'text-color': '#94a3b8',
+            'text-halo-color': '#0f172a',
+            'text-halo-width': 1.5,
+          },
+        }, 'veh-glow')
+
         // Hover popup
         map.on('mouseenter', 'veh-circle', (e) => {
           map.getCanvas().style.cursor = 'pointer'
@@ -232,6 +302,57 @@ export default function LiveMap({ vehicles, fetchedAtMs }: Props) {
 
     return () => { map?.remove() }
   }, [])
+
+  // Update route line + stop markers when routeStops changes
+  useEffect(() => {
+    if (!mapReady) return
+    const map = mapRef.current
+    if (!map) return
+
+    // Split into shape points (for the line) and stop points (for the markers)
+    const shapeRows = routeStops.filter((s) => s.point_type === 'shape')
+    const stopRows  = routeStops.filter((s) => s.point_type === 'stop')
+
+    // Fall back to all points as the line if no shape data returned
+    const lineSource = shapeRows.length > 0 ? shapeRows : routeStops
+
+    // Group line points by direction to build one LineString per direction
+    const byDir = new Map<number, RouteStop[]>()
+    for (const s of lineSource) {
+      const arr = byDir.get(s.direction_id) ?? []
+      arr.push(s)
+      byDir.set(s.direction_id, arr)
+    }
+
+    // Route line source — one LineString per direction, ordered by stop_sequence
+    const lineFeatures = Array.from(byDir.entries()).map(([dir, pts]) => ({
+      type: 'Feature' as const,
+      geometry: {
+        type: 'LineString' as const,
+        coordinates: pts
+          .sort((a, b) => a.stop_sequence - b.stop_sequence)
+          .map((s) => [s.lon, s.lat]),
+      },
+      properties: { direction_id: dir },
+    }))
+
+    // Stop point source — deduplicate by stop_id
+    const seenStops = new Set<string>()
+    const stopFeatures = (stopRows.length > 0 ? stopRows : routeStops).flatMap((s) => {
+      if (seenStops.has(s.stop_id)) return []
+      seenStops.add(s.stop_id)
+      return [{
+        type: 'Feature' as const,
+        geometry: { type: 'Point' as const, coordinates: [s.lon, s.lat] },
+        properties: { stop_id: s.stop_id, stop_name: s.stop_name },
+      }]
+    })
+
+    const lineSrc = map.getSource('route-line') as { setData: (d: unknown) => void } | undefined
+    const stopSrc = map.getSource('route-stops') as { setData: (d: unknown) => void } | undefined
+    lineSrc?.setData({ type: 'FeatureCollection', features: lineFeatures })
+    stopSrc?.setData({ type: 'FeatureCollection', features: stopFeatures })
+  }, [mapReady, routeStops])
 
   // Dead reckoning — update positions every second
   useEffect(() => {

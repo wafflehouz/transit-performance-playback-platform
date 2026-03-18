@@ -86,6 +86,7 @@ SILVER_DIM_CALENDAR_DATES  = tbl("silver_dim_calendar_dates")
 
 # Silver — facts
 SILVER_FACT_STOP_SCHEDULE       = tbl("silver_fact_stop_schedule")
+SILVER_FACT_SHAPE_POINTS        = tbl("silver_fact_shape_points")
 SILVER_FACT_TRIP_UPDATES        = tbl("silver_fact_trip_updates")
 SILVER_FACT_VEHICLE_POSITIONS   = tbl("silver_fact_vehicle_positions")
 

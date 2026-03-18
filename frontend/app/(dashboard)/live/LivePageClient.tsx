@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useFilterPanel } from '@/lib/filter-panel-context'
 import { FilterSection } from '@/components/ui/FilterControls'
 import LiveMap, { type LiveVehicle, type OtpStatus } from '@/components/map/LiveMap'
-import type { DimRoute } from '@/types'
+import type { DimRoute, RouteStop } from '@/types'
 
 const RENDER_API = process.env.NEXT_PUBLIC_RENDER_API_URL ?? 'http://localhost:3001'
 const REFRESH_MS = 30_000
@@ -41,6 +41,79 @@ export default function LivePageClient() {
   const [error, setError] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Route stops (for map overlay) — may include point_type:'shape' | 'stop' tags
+  const [routeStops, setRouteStops] = useState<Array<RouteStop & { point_type?: string }>>([])
+
+
+  // Fetch stops + shape points for selected route.
+  // Two separate queries so stops always render even if silver_fact_shape_points doesn't exist yet.
+  useEffect(() => {
+    if (!selectedRouteId) { setRouteStops([]); return }
+
+    const body = (sql: string) => JSON.stringify({ sql, params: { routeId: selectedRouteId } })
+    const headers = { 'Content-Type': 'application/json' }
+
+    const stopsQuery = `
+      WITH trip_stop_counts AS (
+        SELECT t.trip_id, t.direction_id, COUNT(*) AS n
+        FROM silver_dim_trip t
+        JOIN silver_fact_stop_schedule ss ON t.trip_id = ss.trip_id
+        WHERE t.route_id = :routeId
+        GROUP BY t.trip_id, t.direction_id
+      ),
+      best_trip AS (
+        SELECT trip_id, direction_id,
+          ROW_NUMBER() OVER (PARTITION BY direction_id ORDER BY n DESC) AS rn
+        FROM trip_stop_counts
+      ),
+      rep_trips AS (SELECT trip_id, direction_id FROM best_trip WHERE rn = 1)
+      SELECT ss.stop_sequence, ss.stop_id, s.stop_name, s.lat, s.lon, rt.direction_id
+      FROM rep_trips rt
+      JOIN silver_fact_stop_schedule ss ON rt.trip_id = ss.trip_id
+      JOIN silver_dim_stop s ON ss.stop_id = s.stop_id
+      ORDER BY rt.direction_id, ss.stop_sequence
+    `
+
+    const shapesQuery = `
+      WITH best_trip AS (
+        SELECT t.shape_id, t.direction_id,
+          ROW_NUMBER() OVER (PARTITION BY t.direction_id ORDER BY COUNT(*) DESC) AS rn
+        FROM silver_dim_trip t
+        JOIN silver_fact_stop_schedule ss ON t.trip_id = ss.trip_id
+        WHERE t.route_id = :routeId AND t.shape_id IS NOT NULL
+        GROUP BY t.shape_id, t.direction_id
+      )
+      SELECT sp.shape_pt_sequence AS stop_sequence,
+        sp.shape_id AS stop_id,
+        CAST(NULL AS STRING) AS stop_name,
+        sp.shape_pt_lat AS lat,
+        sp.shape_pt_lon AS lon,
+        bt.direction_id
+      FROM best_trip bt
+      JOIN silver_fact_shape_points sp ON bt.shape_id = sp.shape_id
+      WHERE bt.rn = 1
+      ORDER BY bt.direction_id, sp.shape_pt_sequence
+    `
+
+    const fetchJson = (sql: string) =>
+      fetch('/api/databricks/query', { method: 'POST', headers, body: body(sql) })
+        .then((r) => r.json())
+        .then((d: { rows?: RouteStop[] }) => d.rows ?? [])
+        .catch(() => [] as RouteStop[])
+
+    Promise.all([
+      fetchJson(stopsQuery),
+      fetchJson(shapesQuery),
+    ]).then(([stops, shapes]) => {
+      type Tagged = RouteStop & { point_type: string }
+      const tagged: Tagged[] = [
+        ...shapes.map((r) => ({ ...r, point_type: 'shape' })),
+        ...stops.map((r) => ({ ...r, point_type: 'stop' })),
+      ]
+      setRouteStops(tagged)
+    })
+  }, [selectedRouteId])
+
   // Step 1: get active route IDs from Render immediately (fast — already cached)
   useEffect(() => {
     fetch(`${RENDER_API}/vehicles/routes`)
@@ -74,16 +147,19 @@ export default function LivePageClient() {
       .catch(() => {})
   }, [routeIds])
 
-  // Build display routes merging IDs + names
-  const routes: DimRoute[] = routeIds.map((id) => {
-    const name = routeNames.get(id)
-    return {
-      route_id: id,
-      route_short_name: id,
-      route_long_name: name ? name.split(' – ')[1] ?? '' : '',
-      route_type: 3,
-    }
-  })
+  // Build display routes merging IDs + names — memoized to avoid infinite filter panel loop
+  const routes = useMemo<DimRoute[]>(
+    () => routeIds.map((id) => {
+      const name = routeNames.get(id)
+      return {
+        route_id: id,
+        route_short_name: id,
+        route_long_name: name ? name.split(' – ')[1] ?? '' : '',
+        route_type: 3,
+      }
+    }),
+    [routeIds, routeNames]
+  )
 
   // Fetch vehicles from Render
   const fetchVehicles = useCallback(async (routeId: string) => {
@@ -101,7 +177,8 @@ export default function LivePageClient() {
   // Start/restart polling on route change
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current)
-    if (!selectedRouteId) { setFeed(null); return }
+    setFeed(null) // always clear stale vehicles immediately on route change
+    if (!selectedRouteId) { return }
 
     fetchVehicles(selectedRouteId)
     timerRef.current = setInterval(() => fetchVehicles(selectedRouteId), REFRESH_MS)
@@ -191,7 +268,7 @@ export default function LivePageClient() {
         </div>
       )}
 
-<LiveMap vehicles={feed?.vehicles ?? []} fetchedAtMs={feed?.fetched_at_ms ?? null} />
+<LiveMap vehicles={feed?.vehicles ?? []} fetchedAtMs={feed?.fetched_at_ms ?? null} routeStops={routeStops} />
     </div>
   )
 }
@@ -205,7 +282,31 @@ function LiveFilters({
   selectedRouteId: string | null
   onSelect: (id: string | null) => void
 }) {
+  return (
+    <FilterSection label={`Route ${routes.length > 0 ? `(${routes.length} active)` : '—'}`}>
+      <SingleRouteFilter routes={routes} selectedId={selectedRouteId} onSelect={onSelect} />
+    </FilterSection>
+  )
+}
+
+function SingleRouteFilter({
+  routes, selectedId, onSelect,
+}: {
+  routes: DimRoute[]
+  selectedId: string | null
+  onSelect: (id: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
 
   const filtered = routes.filter((r) => {
     const q = search.toLowerCase()
@@ -213,44 +314,64 @@ function LiveFilters({
       r.route_long_name.toLowerCase().includes(q)
   })
 
+  const selected = routes.find((r) => r.route_id === selectedId)
+  const label = selected
+    ? `Route ${selected.route_short_name}${selected.route_long_name ? ` – ${selected.route_long_name}` : ''}`
+    : 'Select a route…'
+
   return (
-    <FilterSection label={`Route ${routes.length > 0 ? `(${routes.length} active)` : '—'}`}>
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search routes…"
-        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-2"
-      />
-      <div className="space-y-0.5 max-h-80 overflow-y-auto">
-        {filtered.map((r) => (
-          <button
-            key={r.route_id}
-            onClick={() => onSelect(r.route_id === selectedRouteId ? null : r.route_id)}
-            className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${
-              r.route_id === selectedRouteId
-                ? 'bg-blue-600/20 text-blue-300'
-                : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-            }`}
-          >
-            <span className="font-semibold w-8 shrink-0">{r.route_short_name}</span>
-            {r.route_long_name && (
-              <span className="text-gray-500 text-xs truncate">{r.route_long_name}</span>
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-left transition-colors hover:border-gray-600"
+      >
+        <span className={selectedId ? 'text-white truncate pr-2' : 'text-gray-500'}>{label}</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-gray-500 shrink-0">
+          <path strokeLinecap="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 max-h-72 flex flex-col">
+          <div className="p-2 border-b border-gray-700">
+            <input
+              autoFocus
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search routes…"
+              className="w-full bg-gray-900 rounded px-2 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none"
+            />
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {selectedId && (
+              <button
+                onClick={() => { onSelect(null); setOpen(false) }}
+                className="w-full text-left px-3 py-2 text-xs text-blue-400 hover:bg-gray-700 border-b border-gray-700"
+              >
+                Clear selection
+              </button>
             )}
-          </button>
-        ))}
-        {filtered.length === 0 && (
-          <p className="text-gray-600 text-xs text-center py-3">No routes found</p>
-        )}
-      </div>
-      {selectedRouteId && (
-        <button
-          onClick={() => onSelect(null)}
-          className="w-full text-xs text-gray-500 hover:text-gray-300 transition-colors mt-2"
-        >
-          Clear selection
-        </button>
+            {filtered.map((r) => (
+              <button
+                key={r.route_id}
+                onClick={() => { onSelect(r.route_id); setOpen(false) }}
+                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gray-700 transition-colors ${
+                  r.route_id === selectedId ? 'text-blue-300 bg-blue-600/10' : 'text-gray-300'
+                }`}
+              >
+                <span className="font-semibold w-8 shrink-0">{r.route_short_name}</span>
+                {r.route_long_name && (
+                  <span className="text-gray-500 text-xs truncate">{r.route_long_name}</span>
+                )}
+              </button>
+            ))}
+            {filtered.length === 0 && (
+              <p className="text-gray-600 text-xs text-center py-4">No routes found</p>
+            )}
+          </div>
+        </div>
       )}
-    </FilterSection>
+    </div>
   )
 }

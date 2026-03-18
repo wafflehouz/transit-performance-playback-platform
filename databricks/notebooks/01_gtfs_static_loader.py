@@ -383,6 +383,45 @@ else:
 
 # COMMAND ----------
 
+# MAGIC %md ## Step 4d — silver_fact_shape_points
+
+# COMMAND ----------
+
+print("Loading shapes.txt...")
+raw_shapes = read_gtfs_csv("shapes.txt")
+
+if raw_shapes is None:
+    print("  WARNING: shapes.txt not found — skipping silver_fact_shape_points.")
+else:
+    fact_shape_points = (
+        raw_shapes
+        .select(
+            F.col("shape_id").cast(StringType()),
+            F.col("shape_pt_sequence").cast(IntegerType()),
+            F.col("shape_pt_lat").cast(DoubleType()),
+            F.col("shape_pt_lon").cast(DoubleType()),
+            safe_col(raw_shapes, "shape_dist_traveled", DoubleType()),
+        )
+        .dropDuplicates(["shape_id", "shape_pt_sequence"])
+        .withColumn("loaded_ts", F.lit(RUN_TS))
+    )
+
+    (
+        fact_shape_points
+        .write
+        .format("delta")
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .partitionBy("shape_id")
+        .saveAsTable(SILVER_FACT_SHAPE_POINTS)
+    )
+
+    shape_count = spark.table(SILVER_FACT_SHAPE_POINTS).count()
+    shape_ids   = spark.table(SILVER_FACT_SHAPE_POINTS).select("shape_id").distinct().count()
+    print(f"✓ {SILVER_FACT_SHAPE_POINTS}: {shape_count:,} points across {shape_ids:,} shapes")
+
+# COMMAND ----------
+
 # MAGIC %md ## Step 5 — Sanity Checks
 
 # COMMAND ----------
@@ -407,12 +446,19 @@ try:
 except Exception:
     cal_dates_status = "        (not loaded)"
 
+try:
+    shape_pt_count = spark.table(SILVER_FACT_SHAPE_POINTS).count()
+    shape_status = f"{shape_pt_count:>8,} rows"
+except Exception:
+    shape_status = "        (not loaded)"
+
 print(f"  silver_dim_route          : {route_count:>8,} rows")
 print(f"  silver_dim_stop           : {stop_count:>8,} rows")
 print(f"  silver_dim_trip           : {trip_count:>8,} rows")
 print(f"  silver_dim_calendar       : {calendar_status}")
 print(f"  silver_dim_calendar_dates : {cal_dates_status}")
 print(f"  silver_fact_stop_schedule : {stu_count:>8,} rows")
+print(f"  silver_fact_shape_points  : {shape_status}")
 
 # Check referential integrity: trips in stop_times should exist in dim_trip
 orphan_trips = (
