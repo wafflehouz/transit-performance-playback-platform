@@ -9,6 +9,22 @@ import type { DimRoute, RouteStop } from '@/types'
 const RENDER_API = process.env.NEXT_PUBLIC_RENDER_API_URL ?? 'http://localhost:3001'
 const REFRESH_MS = 30_000
 
+// Curated display colors for Valley Metro — designed for contrast on light map.
+// Keyed by GTFS route_type (0=tram, 1=metro rail, 2=rail, 3=bus, 4=ferry, 5=cable, 12=monorail).
+// Valley Metro network: most routes are bus (type 3), plus light rail (1), PHX Sky Train (2),
+// and Tempe Streetcar (0).
+const VM_ROUTE_COLORS: Record<number, string> = {
+  0: '#0891B2',  // Tempe Streetcar — cyan
+  1: '#DC2626',  // Valley Metro Rail (light rail) — red
+  2: '#D97706',  // PHX Sky Train — amber
+  3: '#6D28D9',  // Local/Rapid bus — deep violet
+}
+const FALLBACK_ROUTE_COLOR = '#6D28D9'
+
+function getCuratedColor(routeType: number): string {
+  return VM_ROUTE_COLORS[routeType] ?? FALLBACK_ROUTE_COLOR
+}
+
 interface FeedResponse {
   route_id: string
   vehicle_count: number
@@ -31,10 +47,10 @@ export default function LivePageClient() {
   const setContentRef = useRef(setContent)
   setContentRef.current = setContent
 
-  // Routes — populated immediately from Render, names/colors enriched from Databricks
+  // Routes — populated immediately from Render, names/types enriched from Databricks
   const [routeIds, setRouteIds] = useState<string[]>([])
   const [routeNames, setRouteNames] = useState<Map<string, string>>(new Map())
-  const [routeColors, setRouteColors] = useState<Map<string, string>>(new Map())
+  const [routeTypes, setRouteTypes] = useState<Map<string, number>>(new Map())
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null)
 
   // Feed
@@ -131,22 +147,22 @@ export default function LivePageClient() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sql: `
-          SELECT route_id, route_short_name, route_long_name, route_color
+          SELECT route_id, route_short_name, route_long_name, route_type
           FROM silver_dim_route
           WHERE route_id IN (${routeIds.map((id) => `'${id}'`).join(',')})
         `,
       }),
     })
       .then((r) => r.json())
-      .then((d: { rows: Array<{ route_id: string; route_short_name: string; route_long_name: string; route_color: string | null }> }) => {
+      .then((d: { rows: Array<{ route_id: string; route_short_name: string; route_long_name: string; route_type: number }> }) => {
         const names = new Map<string, string>()
-        const colors = new Map<string, string>()
+        const types = new Map<string, number>()
         for (const row of d.rows ?? []) {
           names.set(row.route_id, `${row.route_short_name} – ${row.route_long_name}`)
-          if (row.route_color) colors.set(row.route_id, `#${row.route_color}`)
+          if (row.route_type != null) types.set(row.route_id, row.route_type)
         }
         setRouteNames(names)
-        setRouteColors(colors)
+        setRouteTypes(types)
       })
       .catch(() => {})
   }, [routeIds])
@@ -159,10 +175,10 @@ export default function LivePageClient() {
         route_id: id,
         route_short_name: id,
         route_long_name: name ? name.split(' – ')[1] ?? '' : '',
-        route_type: 3,
+        route_type: routeTypes.get(id) ?? 3,
       }
     }),
-    [routeIds, routeNames]
+    [routeIds, routeNames, routeTypes]
   )
 
   // Fetch vehicles from Render
@@ -276,7 +292,7 @@ export default function LivePageClient() {
   vehicles={feed?.vehicles ?? []}
   fetchedAtMs={feed?.fetched_at_ms ?? null}
   routeStops={routeStops}
-  routeColor={selectedRouteId ? (routeColors.get(selectedRouteId) ?? null) : null}
+  routeColor={selectedRouteId ? getCuratedColor(routeTypes.get(selectedRouteId) ?? 3) : null}
 />
     </div>
   )
