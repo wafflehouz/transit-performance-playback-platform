@@ -116,46 +116,47 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor 
           data: { type: 'FeatureCollection', features: [] },
         })
 
-        // Outer glow
+        // Outer glow — subtle halo behind vehicle
         map.addLayer({
           id: 'veh-glow',
           type: 'circle',
           source: 'vehicles',
           paint: {
-            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 10, 13, 18],
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 14, 13, 22],
             'circle-color': ['get', 'color'],
-            'circle-opacity': 0.15,
+            'circle-opacity': 0.18,
             'circle-blur': 1,
           },
         })
 
-        // Main circle
+        // Main circle — OTP color, no border, slight transparency like Swiftly
         map.addLayer({
           id: 'veh-circle',
           type: 'circle',
           source: 'vehicles',
           paint: {
-            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 5, 12, 8, 15, 12],
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 8, 12, 12, 15, 16],
             'circle-color': ['get', 'color'],
-            'circle-stroke-width': 2,
-            'circle-stroke-color': '#111827',
+            'circle-opacity': 0.88,
           },
         })
 
-        // Directional tick (bearing indicator) — small line extending from center
+        // Directional arrow — drawn inside the circle, scaled to ~45% of circle diameter
         map.addLayer({
           id: 'veh-bearing',
           type: 'symbol',
           source: 'vehicles',
           layout: {
             'icon-image': 'bearing-arrow',
-            'icon-size': ['interpolate', ['linear'], ['zoom'], 9, 0.3, 13, 0.5],
+            // icon-size maps the 64px canvas to ~45% of circle diameter at each zoom
+            'icon-size': ['interpolate', ['linear'], ['zoom'], 9, 0.11, 12, 0.17, 15, 0.22],
             'icon-rotate': ['coalesce', ['get', 'bearing'], 0],
             'icon-rotation-alignment': 'map',
             'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
           },
           paint: {
-            'icon-opacity': ['case', ['==', ['get', 'bearing'], null], 0, 0.9],
+            'icon-opacity': ['case', ['==', ['get', 'bearing'], null], 0, 1],
           },
         })
 
@@ -167,30 +168,31 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor 
           minzoom: 13,
           layout: {
             'text-field': ['get', 'route_id'],
-            'text-size': 10,
+            'text-size': 11,
             'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-            'text-offset': [0, -1.8],
+            'text-offset': [0, -2.2],
             'text-allow-overlap': false,
           },
           paint: {
             'text-color': '#ffffff',
-            'text-halo-color': '#1e293b',
+            'text-halo-color': '#374151',
             'text-halo-width': 2,
           },
         })
 
-        // Create bearing arrow image (small upward-pointing chevron)
+        // Bearing arrow image — solid upward triangle fills ~60% of the canvas
+        // so that when icon-size scales it to fit inside the circle it reads cleanly
         const size = 64
+        const cx = size / 2
         const canvas = document.createElement('canvas')
         canvas.width = size; canvas.height = size
         const ctx = canvas.getContext('2d')!
-        ctx.fillStyle = '#ffffff'
+        ctx.fillStyle = 'rgba(255,255,255,0.95)'
         ctx.beginPath()
-        // Arrow pointing up (north = 0°)
-        ctx.moveTo(size / 2, 4)
-        ctx.lineTo(size / 2 + 8, size / 2 + 4)
-        ctx.lineTo(size / 2, size / 2 - 2)
-        ctx.lineTo(size / 2 - 8, size / 2 + 4)
+        ctx.moveTo(cx,          8)           // apex — top center
+        ctx.lineTo(cx + 20,     size - 12)   // bottom-right
+        ctx.lineTo(cx,          size - 22)   // inner notch (arrow tail indent)
+        ctx.lineTo(cx - 20,     size - 12)   // bottom-left
         ctx.closePath()
         ctx.fill()
         map.addImage('bearing-arrow', { width: size, height: size, data: new Uint8Array(ctx.getImageData(0, 0, size, size).data) })
@@ -247,19 +249,20 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor 
           id: 'stop-labels',
           type: 'symbol',
           source: 'route-stops',
-          minzoom: 14,
+          minzoom: 13.5,
           layout: {
             'text-field': ['coalesce', ['get', 'stop_name'], ['get', 'stop_id']],
-            'text-size': 10,
-            'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+            'text-size': 11,
+            'text-font': ['Open Sans Semibold', 'Open Sans Bold', 'Arial Unicode MS Bold'],
             'text-offset': [0, 1.4],
             'text-anchor': 'top',
             'text-allow-overlap': false,
+            'text-max-width': 10,
           },
           paint: {
-            'text-color': '#475569',
+            'text-color': '#1e293b',
             'text-halo-color': '#ffffff',
-            'text-halo-width': 1.5,
+            'text-halo-width': 2,
           },
         }, 'veh-glow')
 
