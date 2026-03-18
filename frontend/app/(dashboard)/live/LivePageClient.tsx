@@ -20,7 +20,7 @@ const REFRESH_MS = 30_000
 //   B  #B76912 → #B76912  (amber, reads well as-is)
 //   S  #6D8932 → #5A7A1F  (olive, darkened 10% for better contrast on light map)
 //   SKYT #53565F → #53565F (slate gray, distinctive, keep)
-//   Bus (type 3): Valley Metro purple ~#5C2D8E → #6D28D9 (slightly more vivid)
+//   Bus (type 3): Valley Metro purple #591769 → #591769 (exact GTFS, reads well on light map)
 const VM_NAME_COLORS: Record<string, string> = {
   'A':    '#1E8ECD',  // Valley Metro Rail A Line — sky blue
   'B':    '#B76912',  // Valley Metro Rail B Line — amber/orange
@@ -30,12 +30,12 @@ const VM_NAME_COLORS: Record<string, string> = {
 
 const VM_TYPE_COLORS: Record<number, string> = {
   0: '#1E8ECD',  // Generic tram/light rail fallback — sky blue
-  1: '#6D28D9',  // Metro (not used by VM currently)
-  2: '#6D28D9',  // Rail fallback
-  3: '#6D28D9',  // Local & Rapid bus — deep violet (close to VM purple #5C2D8E)
+  1: '#591769',  // Metro fallback
+  2: '#591769',  // Rail fallback
+  3: '#591769',  // Local & Rapid bus — exact GTFS Valley Metro purple
 }
 
-const FALLBACK_ROUTE_COLOR = '#6D28D9'
+const FALLBACK_ROUTE_COLOR = '#591769'
 
 function getCuratedColor(routeType: number, routeShortName?: string): string {
   if (routeShortName) {
