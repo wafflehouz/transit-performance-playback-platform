@@ -40,6 +40,9 @@ interface Props {
   showDirection?: boolean
   activePreset: DatePreset
   onPresetChange: (p: DatePreset) => void
+  // Optional terminal-stop exclusion toggle (shown when both props provided)
+  excludeTerminals?: boolean
+  onExcludeTerminalsChange?: (v: boolean) => void
 }
 
 export default function RouteFilterPanel({
@@ -50,6 +53,8 @@ export default function RouteFilterPanel({
   showDirection = true,
   activePreset,
   onPresetChange,
+  excludeTerminals,
+  onExcludeTerminalsChange,
 }: Props) {
   const { mode, groupName, routeId, startDate, endDate, direction, timepointOnly } = filters
 
@@ -164,6 +169,37 @@ export default function RouteFilterPanel({
           </button>
         </div>
       </FilterSection>
+
+      {/* Terminal stop exclusion (opt-in — only shown when parent passes the prop) */}
+      {excludeTerminals !== undefined && onExcludeTerminalsChange && (
+        <FilterSection label="Terminal Stops">
+          <div className="flex rounded-lg overflow-hidden border border-gray-700 text-xs">
+            <button
+              onClick={() => onExcludeTerminalsChange(false)}
+              className={cn(
+                'flex-1 py-2 font-medium transition-colors',
+                !excludeTerminals ? 'bg-violet-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
+              )}
+            >
+              Include
+            </button>
+            <button
+              onClick={() => onExcludeTerminalsChange(true)}
+              className={cn(
+                'flex-1 py-2 font-medium transition-colors',
+                excludeTerminals ? 'bg-violet-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
+              )}
+            >
+              Exclude
+            </button>
+          </div>
+          {excludeTerminals && (
+            <p className="text-xs text-gray-600 mt-1 leading-snug">
+              First + last stops per trip removed — suppresses layover dwell
+            </p>
+          )}
+        </FilterSection>
+      )}
     </>
   )
 }
