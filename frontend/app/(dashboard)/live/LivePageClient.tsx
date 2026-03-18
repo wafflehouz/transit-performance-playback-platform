@@ -15,27 +15,29 @@ const REFRESH_MS = 30_000
 // overrides are required to distinguish them.  Bus routes (route_type 3) fall through to
 // the type-based default.
 //
-// GTFS source hex → display hex (reason for change, if any):
-//   A  #1E8ECD → #1E8ECD  (sky blue, reads well as-is)
-//   B  #B76912 → #B76912  (amber, reads well as-is)
-//   S  #6D8932 → #5A7A1F  (olive, darkened 10% for better contrast on light map)
-//   SKYT #53565F → #53565F (slate gray, distinctive, keep)
-//   Bus (type 3): Valley Metro purple #591769 → #591769 (exact GTFS, reads well on light map)
+// GTFS brand hex → dark-map display hex
+// Each color is the brand hue shifted to a vivid, light-on-dark variant that
+// pops on the dataviz-dark map while remaining clearly recognisable.
+//   Bus  #591769 → #A855F7  (same deep purple hue, vivid)
+//   A    #1E8ECD → #38BDF8  (sky blue, brightened)
+//   B    #B76912 → #F59E0B  (amber, brightened)
+//   S    #6D8932 → #84CC16  (olive/lime, same green family, vivid)
+//   SKYT #53565F → #94A3B8  (slate, lightened for dark bg legibility)
 const VM_NAME_COLORS: Record<string, string> = {
-  'A':    '#1E8ECD',  // Valley Metro Rail A Line — sky blue
-  'B':    '#B76912',  // Valley Metro Rail B Line — amber/orange
-  'S':    '#5A7A1F',  // Valley Metro Streetcar — olive green (darkened for contrast)
-  'SKYT': '#53565F',  // PHX Sky Train — slate gray
+  'A':    '#38BDF8',  // Valley Metro Rail A Line — sky blue
+  'B':    '#F59E0B',  // Valley Metro Rail B Line — amber
+  'S':    '#84CC16',  // Valley Metro Streetcar — lime green
+  'SKYT': '#94A3B8',  // PHX Sky Train — slate
 }
 
 const VM_TYPE_COLORS: Record<number, string> = {
-  0: '#1E8ECD',  // Generic tram/light rail fallback — sky blue
-  1: '#591769',  // Metro fallback
-  2: '#591769',  // Rail fallback
-  3: '#591769',  // Local & Rapid bus — exact GTFS Valley Metro purple
+  0: '#38BDF8',  // Generic tram/light rail fallback
+  1: '#A855F7',  // Metro fallback
+  2: '#A855F7',  // Rail fallback
+  3: '#A855F7',  // Local & Rapid bus — vivid purple
 }
 
-const FALLBACK_ROUTE_COLOR = '#591769'
+const FALLBACK_ROUTE_COLOR = '#A855F7'
 
 function getCuratedColor(routeType: number, routeShortName?: string): string {
   if (routeShortName) {

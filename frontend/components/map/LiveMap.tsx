@@ -93,7 +93,7 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor 
     import('maplibre-gl').then((ml) => {
       map = new ml.Map({
         container: containerRef.current!,
-        style: `https://api.maptiler.com/maps/dataviz/style.json?key=${MAPTILER_KEY}`,
+        style: `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}`,
         center: [-112.074, 33.449],
         zoom: 11,
         attributionControl: false,
@@ -237,7 +237,7 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor 
           source: 'route-stops',
           paint: {
             'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 3, 14, 6],
-            'circle-color': '#ffffff',
+            'circle-color': '#0f172a',
             'circle-stroke-width': 2,
             'circle-stroke-color': '#38bdf8',
             'circle-opacity': 1,
@@ -260,8 +260,8 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor 
             'text-max-width': 10,
           },
           paint: {
-            'text-color': '#1e293b',
-            'text-halo-color': '#ffffff',
+            'text-color': '#e2e8f0',
+            'text-halo-color': '#0f172a',
             'text-halo-width': 2,
           },
         }, 'veh-glow')
@@ -414,21 +414,21 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor 
     <>
       <style>{`
         .vp-popup .maplibregl-popup-content {
-          background: #ffffff; border: 1px solid #e2e8f0;
+          background: #0f172a; border: 1px solid #1e293b;
           border-radius: 12px; padding: 0;
-          box-shadow: 0 8px 24px rgba(0,0,0,0.12); font-family: inherit;
+          box-shadow: 0 20px 40px rgba(0,0,0,0.6); font-family: inherit;
           min-width: 180px;
         }
-        .vp-popup .maplibregl-popup-tip { border-top-color: #e2e8f0; }
+        .vp-popup .maplibregl-popup-tip { border-top-color: #1e293b; }
         .vp-inner { padding: 12px 14px; }
         .vp-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
         .vp-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 99px; border: 1px solid; text-transform: capitalize; }
-        .vp-vid { color: #64748b; font-size: 11px; }
-        .vp-delay { color: #0f172a; font-weight: 600; font-size: 13px; margin-bottom: 8px; }
-        .vp-rows { border-top: 1px solid #e2e8f0; padding-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+        .vp-vid { color: #94a3b8; font-size: 11px; }
+        .vp-delay { color: #f1f5f9; font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+        .vp-rows { border-top: 1px solid #1e293b; padding-top: 8px; display: flex; flex-direction: column; gap: 3px; }
         .vp-row { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; }
-        .vp-row span:first-child { color: #94a3b8; }
-        .vp-row span:last-child { color: #1e293b; font-weight: 500; }
+        .vp-row span:first-child { color: #64748b; }
+        .vp-row span:last-child { color: #cbd5e1; font-weight: 500; }
       `}</style>
       <div ref={containerRef} className="flex-1 h-full w-full" />
     </>
