@@ -9,34 +9,38 @@ import type { DimRoute, RouteStop } from '@/types'
 const RENDER_API = process.env.NEXT_PUBLIC_RENDER_API_URL ?? 'http://localhost:3001'
 const REFRESH_MS = 30_000
 
-// Curated display colors for Valley Metro — optimised for contrast on light map
-// without straying far from agency branding.
+// Valley Metro display colors — derived from routes.txt with minor light-map adjustments.
 //
-// Name-based overrides take priority (for lines that share a route_type but differ visually).
-// Falls back to type-based color, then default bus violet.
+// All four non-bus services share route_type 0 (tram/light rail in GTFS), so name-based
+// overrides are required to distinguish them.  Bus routes (route_type 3) fall through to
+// the type-based default.
+//
+// GTFS source hex → display hex (reason for change, if any):
+//   A  #1E8ECD → #1E8ECD  (sky blue, reads well as-is)
+//   B  #B76912 → #B76912  (amber, reads well as-is)
+//   S  #6D8932 → #5A7A1F  (olive, darkened 10% for better contrast on light map)
+//   SKYT #53565F → #53565F (slate gray, distinctive, keep)
+//   Bus (type 3): Valley Metro purple ~#5C2D8E → #6D28D9 (slightly more vivid)
 const VM_NAME_COLORS: Record<string, string> = {
-  'A':    '#EA580C',  // METRO A Line — orange  (Valley Metro orange brand)
-  'B':    '#2563EB',  // METRO B Line — blue
-  'LINK': '#7C3AED',  // METRO LINK connector
-  'PHX':  '#0284C7',  // PHX Sky Train — sky blue
-  'GOLD': '#D97706',  // Orbit Gold / Tempe circulator variants
-  'RED':  '#DC2626',
-  'BLUE': '#2563EB',
+  'A':    '#1E8ECD',  // Valley Metro Rail A Line — sky blue
+  'B':    '#B76912',  // Valley Metro Rail B Line — amber/orange
+  'S':    '#5A7A1F',  // Valley Metro Streetcar — olive green (darkened for contrast)
+  'SKYT': '#53565F',  // PHX Sky Train — slate gray
 }
 
 const VM_TYPE_COLORS: Record<number, string> = {
-  0: '#0D9488',  // Tram / streetcar (Tempe Streetcar) — teal
-  1: '#EA580C',  // Metro light rail (default, overridden per line above) — orange
-  2: '#0284C7',  // Rail / commuter — sky blue
-  3: '#6D28D9',  // Local & Rapid bus — deep violet
+  0: '#1E8ECD',  // Generic tram/light rail fallback — sky blue
+  1: '#6D28D9',  // Metro (not used by VM currently)
+  2: '#6D28D9',  // Rail fallback
+  3: '#6D28D9',  // Local & Rapid bus — deep violet (close to VM purple #5C2D8E)
 }
 
 const FALLBACK_ROUTE_COLOR = '#6D28D9'
 
 function getCuratedColor(routeType: number, routeShortName?: string): string {
   if (routeShortName) {
-    const nameKey = routeShortName.toUpperCase().trim()
-    if (VM_NAME_COLORS[nameKey]) return VM_NAME_COLORS[nameKey]
+    const key = routeShortName.toUpperCase().trim()
+    if (VM_NAME_COLORS[key]) return VM_NAME_COLORS[key]
   }
   return VM_TYPE_COLORS[routeType] ?? FALLBACK_ROUTE_COLOR
 }
