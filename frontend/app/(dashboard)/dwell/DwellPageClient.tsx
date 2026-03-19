@@ -522,7 +522,11 @@ function StopProfileTab({
     label: profileData.find((r) => toNum(r.direction_id) === d)?.direction_label ?? `Dir ${d}`,
     rows: profileData
       .filter((r) => toNum(r.direction_id) === d)
-      .sort((a, b) => toNum(a.stop_sequence) - toNum(b.stop_sequence)),
+      .sort((a, b) => toNum(a.stop_sequence) - toNum(b.stop_sequence))
+      .map((r) => ({
+        ...r,
+        stop_label: `${toNum(r.stop_sequence)}. ${r.stop_name ?? r.stop_id}`,
+      })),
   })).filter((g) => g.rows.length > 0)
 
   return (
@@ -539,10 +543,10 @@ function StopProfileTab({
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" horizontal={false} />
               <XAxis type="number" tick={{ fill: '#6b7280', fontSize: 10 }} tickLine={false} axisLine={false}
                 tickFormatter={(v) => `${v}s`} />
-              <YAxis type="category" dataKey="stop_name" width={220}
+              <YAxis type="category" dataKey="stop_label" width={240}
                 tick={{ fill: '#9ca3af', fontSize: 10 }}
                 tickLine={false} axisLine={false}
-                tickFormatter={(v: string) => v.length > 30 ? v.slice(0, 30) + '…' : v}
+                tickFormatter={(v: string) => v.length > 32 ? v.slice(0, 32) + '…' : v}
               />
               <Tooltip
                 contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 }}
