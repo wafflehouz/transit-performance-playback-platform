@@ -70,12 +70,13 @@ async function fetchJson(sql: string, params: Record<string, string> = {}) {
 
 // ── Tabs ───────────────────────────────────────────────────────────────────────
 
-type TabId = 'summary' | 'by-route' | 'stop-profile' | 'time-of-day' | 'trend'
+type TabId = 'summary' | 'by-route' | 'stop-profile' | 'trip-matrix' | 'time-of-day' | 'trend'
 
 const ALL_TABS: { id: TabId; label: string; modes: DwellFilterState['mode'][] }[] = [
   { id: 'summary',      label: 'Summary',      modes: ['all', 'group', 'single'] },
   { id: 'by-route',     label: 'By Route',     modes: ['all', 'group'] },
   { id: 'stop-profile', label: 'Stop Profile', modes: ['single'] },
+  { id: 'trip-matrix',  label: 'Trip Matrix',  modes: ['single'] },
   { id: 'time-of-day',  label: 'Time of Day',  modes: ['all', 'group', 'single'] },
   { id: 'trend',        label: 'Trend',        modes: ['all', 'group', 'single'] },
 ]
@@ -296,7 +297,12 @@ export default function DwellPageClient() {
               <ByRouteTab rows={byRouteData} />
             )}
             {activeTab === 'stop-profile' && (
-              <StopProfileTab profileData={profileData} matrixData={matrixData} direction={filters.direction} endDate={filters.endDate} />
+              <StopProfileTab profileData={profileData} direction={filters.direction} />
+            )}
+            {activeTab === 'trip-matrix' && (
+              <div className="p-6">
+                <TripMatrix data={matrixData} endDate={filters.endDate} />
+              </div>
             )}
             {activeTab === 'time-of-day' && (
               <TimeOfDayTab data={todData} />
@@ -502,14 +508,12 @@ function ByRouteTab({ rows }: { rows: any[] }) {
 // ── Stop Profile tab ───────────────────────────────────────────────────────────
 
 function StopProfileTab({
-  profileData, matrixData, direction, endDate,
+  profileData, direction,
 }: {
   profileData: any[]
-  matrixData: any[]
   direction: 0 | 1 | 'both'
-  endDate: string
 }) {
-  if (profileData.length === 0 && matrixData.length === 0) return <EmptyState />
+  if (profileData.length === 0) return <EmptyState />
 
   // Group profile by direction
   const dirs = direction === 'both' ? [0, 1] : [direction as number]
@@ -551,11 +555,6 @@ function StopProfileTab({
           </ResponsiveContainer>
         </div>
       ))}
-
-      {/* Trip × Stop Matrix */}
-      {matrixData.length > 0 && (
-        <TripMatrix data={matrixData} endDate={endDate} />
-      )}
     </div>
   )
 }
@@ -587,9 +586,9 @@ function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
   const lookup = new Map<string, number>()
   for (const r of dirData) lookup.set(`${r.trip_id}:${r.stop_sequence}`, toNum(r.dwell_seconds))
 
-  const CELL_W = 22
-  const CELL_H = 16
-  const LABEL_W = 80
+  const CELL_W = 32
+  const CELL_H = 22
+  const LABEL_W = 96
 
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
@@ -643,11 +642,11 @@ function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
         <div className="overflow-auto">
           <div style={{ minWidth: LABEL_W + stops.length * CELL_W }}>
             {/* Stop header row */}
-            <div style={{ display: 'flex', alignItems: 'flex-end', height: 56, marginLeft: LABEL_W }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', height: 72, marginLeft: LABEL_W }}>
               {stops.map(([seq, name]) => (
                 <div
                   key={seq}
-                  style={{ width: CELL_W, flexShrink: 0, position: 'relative', height: 56 }}
+                  style={{ width: CELL_W, flexShrink: 0, position: 'relative', height: 72 }}
                 >
                   <div style={{
                     position: 'absolute',
