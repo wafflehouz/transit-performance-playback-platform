@@ -639,28 +639,31 @@ function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
       ) : (
         <div className="overflow-auto">
           <div style={{ minWidth: LABEL_W + stops.length * CELL_W }}>
-            {/* Stop header row — writing-mode keeps text inside its layout box, no overlap */}
-            <div style={{ display: 'flex', alignItems: 'flex-end', height: 100, marginLeft: LABEL_W, borderBottom: '1px solid #1f2937', marginBottom: 2 }}>
+            {/* Stop header row — overflow:visible lets rotated labels extend upward freely */}
+            <div style={{ display: 'flex', alignItems: 'flex-end', height: 120, marginLeft: LABEL_W, overflow: 'visible', marginTop: 16 }}>
               {stops.map(([seq, name]) => (
                 <div
                   key={seq}
-                  style={{ width: CELL_W, flexShrink: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: 4, overflow: 'hidden', height: 100 }}
+                  style={{ width: CELL_W, flexShrink: 0, position: 'relative', height: 120 }}
                 >
-                  <span style={{
-                    writingMode: 'vertical-rl',
-                    transform: 'rotate(180deg)',
+                  <div style={{
+                    position: 'absolute',
+                    bottom: 8,
+                    left: '50%',
+                    transform: 'translateX(-50%) rotate(-45deg)',
+                    transformOrigin: '50% 100%',
+                    whiteSpace: 'nowrap',
                     fontSize: 10,
                     color: '#9ca3af',
-                    whiteSpace: 'nowrap',
-                    maxHeight: 90,
-                    overflow: 'hidden',
-                    lineHeight: 1.2,
+                    lineHeight: 1,
                   }}>
-                    {name.length > 18 ? name.slice(0, 18) + '…' : name}
-                  </span>
+                    {name.length > 20 ? name.slice(0, 20) + '…' : name}
+                  </div>
                 </div>
               ))}
             </div>
+            {/* Spacer between header and data so rotated labels don't overlap row 1 */}
+            <div style={{ height: 8, marginLeft: LABEL_W, borderBottom: '1px solid #1f2937' }} />
 
             {/* Data rows */}
             {trips.map((tripId) => (
