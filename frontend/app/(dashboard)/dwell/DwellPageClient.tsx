@@ -399,7 +399,7 @@ function SummaryTab({
           </h3>
           <p className="text-xs text-gray-600 mb-3">Avg actual dwell, descending</p>
           {topSorted.length === 0 ? <EmptyChart /> : (
-            <ResponsiveContainer width="100%" height={220}>
+            <ResponsiveContainer width="100%" height={Math.max(260, topSorted.length * 22)}>
               <BarChart
                 data={topSorted}
                 layout="vertical"
@@ -408,10 +408,10 @@ function SummaryTab({
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" horizontal={false} />
                 <XAxis type="number" tick={{ fill: '#6b7280', fontSize: 10 }} tickLine={false} axisLine={false}
                   tickFormatter={(v) => `${v}s`} />
-                <YAxis type="category" dataKey="stop_name" width={130}
-                  tick={{ fill: '#9ca3af', fontSize: 9 }}
+                <YAxis type="category" dataKey="stop_name" width={200}
+                  tick={{ fill: '#9ca3af', fontSize: 10 }}
                   tickLine={false} axisLine={false}
-                  tickFormatter={(v: string) => v.length > 18 ? v.slice(0, 18) + '…' : v}
+                  tickFormatter={(v: string) => v.length > 26 ? v.slice(0, 26) + '…' : v}
                 />
                 <Tooltip
                   contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 }}
@@ -534,15 +534,15 @@ function StopProfileTab({
             {dirId === 0 ? `${label} →` : `← ${label}`} — Avg Dwell by Stop
           </h3>
           <p className="text-xs text-gray-600 mb-4">VP-inferred · ordered by stop sequence · terminal stops excluded when filter active</p>
-          <ResponsiveContainer width="100%" height={220}>
+          <ResponsiveContainer width="100%" height={Math.max(320, rows.length * 30)}>
             <BarChart data={rows} layout="vertical" margin={{ top: 0, right: 48, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" horizontal={false} />
               <XAxis type="number" tick={{ fill: '#6b7280', fontSize: 10 }} tickLine={false} axisLine={false}
                 tickFormatter={(v) => `${v}s`} />
-              <YAxis type="category" dataKey="stop_name" width={150}
-                tick={{ fill: '#9ca3af', fontSize: 9 }}
+              <YAxis type="category" dataKey="stop_name" width={220}
+                tick={{ fill: '#9ca3af', fontSize: 10 }}
                 tickLine={false} axisLine={false}
-                tickFormatter={(v: string) => v.length > 20 ? v.slice(0, 20) + '…' : v}
+                tickFormatter={(v: string) => v.length > 30 ? v.slice(0, 30) + '…' : v}
               />
               <Tooltip
                 contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 }}
