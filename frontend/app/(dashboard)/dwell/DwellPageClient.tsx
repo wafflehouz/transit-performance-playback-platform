@@ -587,8 +587,8 @@ function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
   for (const r of dirData) lookup.set(`${r.trip_id}:${r.stop_sequence}`, toNum(r.dwell_seconds))
 
   const CELL_W = 32
-  const CELL_H = 22
-  const LABEL_W = 96
+  const CELL_H = 26
+  const LABEL_W = 116
 
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
@@ -622,18 +622,16 @@ function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
       {/* Color legend */}
       <div className="flex items-center gap-3 mb-3 flex-wrap">
         {[
-          { label: '<15s', color: '#374151' },
-          { label: '15-30s', color: '#15803d' },
-          { label: '30-60s', color: '#a16207' },
+          { label: '30-60s',  color: '#a16207' },
           { label: '60-120s', color: '#c2410c' },
-          { label: '120s+', color: '#b91c1c' },
+          { label: '120s+',   color: '#b91c1c' },
         ].map(({ label, color }) => (
           <span key={label} className="flex items-center gap-1 text-xs text-gray-400">
             <span className="inline-block w-3 h-3 rounded-sm" style={{ background: color }} />
             {label}
           </span>
         ))}
-        <span className="text-xs text-gray-600 ml-1">— no data</span>
+        <span className="text-xs text-gray-600 ml-1">— no data / &lt;30s</span>
       </div>
 
       {trips.length === 0 ? (
@@ -641,26 +639,25 @@ function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
       ) : (
         <div className="overflow-auto">
           <div style={{ minWidth: LABEL_W + stops.length * CELL_W }}>
-            {/* Stop header row */}
-            <div style={{ display: 'flex', alignItems: 'flex-end', height: 72, marginLeft: LABEL_W }}>
+            {/* Stop header row — writing-mode keeps text inside its layout box, no overlap */}
+            <div style={{ display: 'flex', alignItems: 'flex-end', height: 100, marginLeft: LABEL_W, borderBottom: '1px solid #1f2937', marginBottom: 2 }}>
               {stops.map(([seq, name]) => (
                 <div
                   key={seq}
-                  style={{ width: CELL_W, flexShrink: 0, position: 'relative', height: 72 }}
+                  style={{ width: CELL_W, flexShrink: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: 4, overflow: 'hidden', height: 100 }}
                 >
-                  <div style={{
-                    position: 'absolute',
-                    bottom: 4,
-                    left: '50%',
-                    transform: 'translateX(-50%) rotate(-45deg)',
-                    transformOrigin: '50% 100%',
+                  <span style={{
+                    writingMode: 'vertical-rl',
+                    transform: 'rotate(180deg)',
+                    fontSize: 10,
+                    color: '#9ca3af',
                     whiteSpace: 'nowrap',
-                    fontSize: 8,
-                    color: '#6b7280',
-                    lineHeight: 1,
+                    maxHeight: 90,
+                    overflow: 'hidden',
+                    lineHeight: 1.2,
                   }}>
-                    {name.length > 14 ? name.slice(0, 14) + '…' : name}
-                  </div>
+                    {name.length > 18 ? name.slice(0, 18) + '…' : name}
+                  </span>
                 </div>
               ))}
             </div>
@@ -671,8 +668,8 @@ function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
                 {/* Trip label */}
                 <div style={{
                   width: LABEL_W, flexShrink: 0,
-                  fontSize: 8, color: '#6b7280',
-                  textAlign: 'right', paddingRight: 6,
+                  fontSize: 11, color: '#9ca3af',
+                  textAlign: 'right', paddingRight: 8,
                   overflow: 'hidden', whiteSpace: 'nowrap',
                 }}>
                   {tripId.slice(-10)}
