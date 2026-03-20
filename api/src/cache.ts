@@ -13,6 +13,7 @@ export type OtpStatus = 'early' | 'on_time' | 'late' | 'very_late' | 'unknown'
 
 export interface VehiclePosition {
   vehicle_id: string
+  headsign: string | null       // vehicle.vehicle.label from Mecatran feed
   trip_id: string | null
   route_id: string | null
   direction_id: number | null
@@ -62,7 +63,7 @@ interface GtfsRtFeed {
 interface GtfsRtEntity {
   id?: string
   vehicle?: {
-    vehicle?: { id?: string }
+    vehicle?: { id?: string; label?: string }
     trip?: { tripId?: string; routeId?: string; directionId?: number }
     position?: { latitude?: number; longitude?: number; bearing?: number; speed?: number }
     timestamp?: string | number
@@ -89,6 +90,7 @@ function parseVP(data: GtfsRtFeed): Map<string, Omit<VehiclePosition, 'delay_sec
     const vehicleId = veh.vehicle?.id ?? entity.id ?? 'unknown'
     map.set(veh.trip.tripId ?? vehicleId, {
       vehicle_id: vehicleId,
+      headsign: veh.vehicle?.label ?? null,
       trip_id: veh.trip.tripId ?? null,
       route_id: veh.trip.routeId ?? null,
       direction_id: veh.trip.directionId ?? null,

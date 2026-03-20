@@ -8,6 +8,7 @@ export type OtpStatus = 'early' | 'on_time' | 'late' | 'very_late' | 'unknown'
 
 export interface LiveVehicle {
   vehicle_id: string
+  headsign: string | null
   trip_id: string | null
   route_id: string | null
   direction_id: number | null
@@ -26,7 +27,6 @@ interface Props {
   fetchedAtMs: number | null  // epoch ms when vehicles were fetched — for dead reckoning
   routeStops: Array<RouteStop & { point_type?: string }>
   routeColor: string | null   // GTFS route_color (#RRGGBB) — null falls back to default
-  headsigns: Map<number, string>  // direction_id → trip_headsign
 }
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY!
@@ -74,19 +74,17 @@ function deadReckon(
 
 const DEFAULT_ROUTE_COLOR = '#38bdf8'
 
-export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor, headsigns }: Props) {
+export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MaplibreMap | null>(null)
   const popupRef = useRef<Popup | null>(null)
   const vehiclesRef = useRef<LiveVehicle[]>(vehicles)
   const fetchedAtMsRef = useRef<number | null>(fetchedAtMs)
-  const headsignsRef = useRef<Map<number, string>>(headsigns)
   const [mapReady, setMapReady] = useState(false)
 
   // Keep refs current for the dead reckoning interval
   useEffect(() => { vehiclesRef.current = vehicles }, [vehicles])
   useEffect(() => { fetchedAtMsRef.current = fetchedAtMs }, [fetchedAtMs])
-  useEffect(() => { headsignsRef.current = headsigns }, [headsigns])
 
   // Init map once
   useEffect(() => {
@@ -255,8 +253,7 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor,
           const feat = e.features?.[0]
           if (!feat || feat.geometry.type !== 'Point') return
           const p = feat.properties as Record<string, unknown>
-          const dirId = p.direction_id as number | null
-          const headsign = dirId != null ? (headsignsRef.current.get(dirId) ?? '—') : '—'
+          const headsign = (p.headsign as string | null) ?? '—'
           const speed = p.speed_mps != null ? `${((p.speed_mps as number) * 2.237).toFixed(0)} mph` : '—'
 
           popupRef.current
@@ -377,6 +374,7 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor,
             geometry: { type: 'Point', coordinates: [lon, lat] },
             properties: {
               vehicle_id: v.vehicle_id,
+              headsign: v.headsign,
               trip_id: v.trip_id,
               route_id: v.route_id,
               direction_id: v.direction_id,
