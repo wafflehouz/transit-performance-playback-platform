@@ -267,27 +267,10 @@ export default function DashboardClient() {
               </div>
             )}
 
-            {/* Quick links */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {[
-                { href: '/live',   label: 'Live Operations', desc: 'Real-time vehicle positions',  icon: '📡' },
-                { href: '/otp',    label: 'OTP Analysis',    desc: 'Stop-level on-time detail',    icon: '📊' },
-                { href: '/dwell',  label: 'Dwell Analysis',  desc: 'Stop dwell time breakdown',    icon: '📈' },
-                { href: '/trip',   label: 'Trip Playback',   desc: 'Replay individual trips',       icon: '▶️' },
-                { href: '/route',  label: 'Route Metrics',   desc: '15-min route performance grid', icon: '🗂️' },
-                { href: '/anomaly',label: 'Anomaly Monitor', desc: 'Deviation alerts',              icon: '⚠️' },
-              ].map(({ href, label, desc, icon }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-gray-700 hover:bg-gray-800/50 transition-colors group"
-                >
-                  <div className="text-xl mb-2">{icon}</div>
-                  <div className="text-sm font-medium text-white group-hover:text-blue-300 transition-colors">{label}</div>
-                  <div className="text-xs text-gray-500 mt-0.5">{desc}</div>
-                </Link>
-              ))}
-            </div>
+            {/* Nav hint */}
+            <p className="text-xs text-gray-600 text-center pb-2">
+              Use the sidebar on the left to navigate to Live Operations, OTP Analysis, Dwell, Trip Playback, and more.
+            </p>
           </>
         ) : (
           <div className="flex items-center justify-center h-64 text-gray-600 text-sm">No data for yesterday</div>
