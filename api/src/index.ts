@@ -8,23 +8,9 @@ const app = express()
 const PORT = parseInt(process.env.PORT ?? '3001', 10)
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:3001',
-  process.env.ALLOWED_ORIGIN,
-].filter(Boolean) as string[]
-
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (health checks, curl, Render pings)
-      if (!origin) return callback(null, true)
-      if (allowedOrigins.includes(origin)) return callback(null, true)
-      callback(new Error(`CORS: origin ${origin} not allowed`))
-    },
-    methods: ['GET'],
-  })
-)
+// Public read-only feed — allow all origins so Vercel preview URLs and local
+// dev all work without reconfiguring Render env vars.
+app.use(cors({ methods: ['GET'] }))
 
 app.use(express.json())
 
