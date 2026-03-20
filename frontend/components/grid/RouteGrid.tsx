@@ -10,9 +10,15 @@ interface Props {
   metrics: RouteMetrics15Min[]
   routes: DimRoute[]
   directionFilter: 0 | 1 | 'both'
+  headsigns: Map<string, string>
 }
 
-export default function RouteGrid({ metrics, routes, directionFilter }: Props) {
+function routeHex(route: DimRoute | undefined): string {
+  if (!route?.route_color) return '#475569'
+  return route.route_color.startsWith('#') ? route.route_color : `#${route.route_color}`
+}
+
+export default function RouteGrid({ metrics, routes, directionFilter, headsigns }: Props) {
   const [selected, setSelected] = useState<RouteMetrics15Min | null>(null)
 
   const routeMap = useMemo(
@@ -33,11 +39,24 @@ export default function RouteGrid({ metrics, routes, directionFilter }: Props) {
     [filtered]
   )
 
-  // Show only every-other bucket label to avoid crowding
+  // Show every 4th bucket label to avoid crowding
   const labeledBuckets = useMemo(
     () => buckets.filter((_, i) => i % 4 === 0),
     [buckets]
   )
+
+  // Precompute which rdKey is the first direction for its route
+  const isFirstDirMap = useMemo(() => {
+    const seen = new Set<string>()
+    return new Map(
+      routeDirections.map((rdKey) => {
+        const [routeId] = rdKey.split('|')
+        const first = !seen.has(routeId)
+        seen.add(routeId)
+        return [rdKey, first]
+      })
+    )
+  }, [routeDirections])
 
   if (routeDirections.length === 0) {
     return (
@@ -71,23 +90,42 @@ export default function RouteGrid({ metrics, routes, directionFilter }: Props) {
         </div>
 
         {/* Grid rows */}
-        <div className="space-y-0.5">
-          {routeDirections.map((rdKey) => {
+        <div className="space-y-0">
+          {routeDirections.map((rdKey, idx) => {
             const [routeId, dirStr] = rdKey.split('|')
             const dir = parseInt(dirStr)
             const route = routeMap.get(routeId)
             const bucketMap = grid.get(rdKey)!
+            const isFirst = isFirstDirMap.get(rdKey) ?? true
+            const color = routeHex(route)
 
             return (
-              <div key={rdKey} className="flex items-center gap-px group">
+              <div
+                key={rdKey}
+                className={`flex items-center gap-px${isFirst && idx > 0 ? ' mt-2' : ' mt-0.5'}`}
+              >
                 {/* Route label */}
-                <div className="w-28 shrink-0 flex items-center gap-1.5 pr-2">
-                  <span className="text-white text-xs font-medium tabular-nums">
-                    {route?.route_short_name ?? routeId}
-                  </span>
-                  <span className="text-gray-600 text-[10px]">
-                    {dir === 0 ? '→' : '←'}
-                  </span>
+                <div className="w-28 shrink-0 pr-2">
+                  {isFirst ? (
+                    <div className="flex items-center gap-1.5">
+                      <div
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: color }}
+                      />
+                      <span className="text-white text-xs font-medium tabular-nums leading-none">
+                        {route?.route_short_name ?? routeId}
+                      </span>
+                      <span className="text-gray-500 text-[10px]">
+                        {dir === 0 ? '→' : '←'}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center pl-3.5">
+                      <span className="text-gray-600 text-[10px]">
+                        {dir === 0 ? '→' : '←'}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Cells */}
@@ -118,6 +156,12 @@ export default function RouteGrid({ metrics, routes, directionFilter }: Props) {
       <AnomalyDrawer
         metrics={selected}
         routeShortName={selectedRoute?.route_short_name ?? selected?.route_id ?? ''}
+        routeColor={routeHex(selectedRoute ?? undefined)}
+        headsign={
+          selected
+            ? (headsigns.get(`${selected.route_id}|${selected.direction_id}`) ?? null)
+            : null
+        }
         onClose={() => setSelected(null)}
       />
     </>

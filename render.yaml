@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: transit-live-api
+    runtime: node
+    rootDir: api
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: MECATRAN_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: ALLOWED_ORIGIN
+        sync: false          # set to your Vercel URL, e.g. https://your-app.vercel.app
+      - key: NODE_ENV
+        value: production

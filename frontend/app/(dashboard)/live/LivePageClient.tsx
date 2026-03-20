@@ -198,6 +198,7 @@ export default function LivePageClient() {
         route_short_name: id,
         route_long_name: name ? name.split(' – ')[1] ?? '' : '',
         route_type: routeTypes.get(id) ?? 3,
+        route_color: null,
       }
     }),
     [routeIds, routeNames, routeTypes]

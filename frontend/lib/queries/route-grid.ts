@@ -7,7 +7,8 @@ export async function getRoutes(): Promise<DimRoute[]> {
       r.route_id,
       r.route_short_name,
       r.route_long_name,
-      r.route_type
+      r.route_type,
+      r.route_color
     FROM silver_dim_route r
     INNER JOIN gold_route_metrics_15min m ON r.route_id = m.route_id
     ORDER BY
@@ -72,10 +73,25 @@ export function buildGridData(rows: RouteMetrics15Min[]): {
     grid.get(key)!.set(bucket, row)
   }
 
+  // Compute worst-bucket avg delay per route for sorting
+  const routeWorstDelay = new Map<string, number>()
+  for (const [key, bucketMap] of grid) {
+    const [routeId] = key.split('|')
+    let worst = routeWorstDelay.get(routeId) ?? 0
+    for (const m of bucketMap.values()) {
+      if (m.avg_delay_seconds > worst) worst = m.avg_delay_seconds
+    }
+    routeWorstDelay.set(routeId, worst)
+  }
+
   const buckets = Array.from(bucketSet).sort()
   const routeDirections = Array.from(rdSet).sort((a, b) => {
     const [ra] = a.split('|')
     const [rb] = b.split('|')
+    // Primary: worst delay descending (most-delayed routes first)
+    const delayDiff = (routeWorstDelay.get(rb) ?? 0) - (routeWorstDelay.get(ra) ?? 0)
+    if (delayDiff !== 0) return delayDiff
+    // Secondary: route number ascending
     const na = parseInt(ra) || 9999
     const nb = parseInt(rb) || 9999
     return na !== nb ? na - nb : a.localeCompare(b)

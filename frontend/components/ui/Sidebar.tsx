@@ -20,7 +20,7 @@ const NAV = [
     ),
   },
   {
-    href: '/playback',
+    href: '/trip',
     label: 'Trip Playback',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="w-5 h-5">

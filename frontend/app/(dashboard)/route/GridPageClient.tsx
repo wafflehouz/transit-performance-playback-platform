@@ -27,17 +27,18 @@ export default function GridPageClient() {
   const [selectedRoutes, setSelectedRoutes] = useState<string[]>([])
   const [metrics, setMetrics] = useState<RouteMetrics15Min[]>([])
   const [routes, setRoutes] = useState<DimRoute[]>([])
+  const [headsigns, setHeadsigns] = useState<Map<string, string>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
 
-  // Load routes once
+  // Load routes + headsigns once
   useEffect(() => {
     fetch('/api/databricks/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sql: `
-          SELECT DISTINCT r.route_id, r.route_short_name, r.route_long_name, r.route_type
+          SELECT DISTINCT r.route_id, r.route_short_name, r.route_long_name, r.route_type, r.route_color
           FROM silver_dim_route r
           INNER JOIN gold_route_metrics_15min m ON r.route_id = m.route_id
           ORDER BY
@@ -50,6 +51,31 @@ export default function GridPageClient() {
       .then((r) => r.json())
       .then((d) => setRoutes(d.rows ?? []))
       .catch(() => setError('Failed to load routes'))
+
+    fetch('/api/databricks/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sql: `
+          SELECT route_id, direction_id, trip_headsign AS headsign
+          FROM (
+            SELECT route_id, direction_id, trip_headsign, COUNT(*) AS cnt
+            FROM silver_dim_trip
+            WHERE trip_headsign IS NOT NULL
+            GROUP BY route_id, direction_id, trip_headsign
+          )
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY route_id, direction_id ORDER BY cnt DESC) = 1
+        `,
+      }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        const map = new Map<string, string>()
+        for (const row of d.rows ?? []) {
+          map.set(`${row.route_id}|${row.direction_id}`, row.headsign)
+        }
+        setHeadsigns(map)
+      })
   }, [])
 
   // Fetch metrics when filters change
@@ -138,7 +164,7 @@ export default function GridPageClient() {
         ) : isPending ? (
           <GridSkeleton />
         ) : (
-          <RouteGrid metrics={metrics} routes={routes} directionFilter={directionFilter} />
+          <RouteGrid metrics={metrics} routes={routes} directionFilter={directionFilter} headsigns={headsigns} />
         )}
       </div>
     </div>

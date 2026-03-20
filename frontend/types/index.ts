@@ -67,6 +67,7 @@ export interface DimRoute {
   route_short_name: string
   route_long_name: string
   route_type: number
+  route_color: string | null   // GTFS hex without '#', e.g. "591769"
 }
 
 export interface RouteStop {
@@ -76,6 +77,13 @@ export interface RouteStop {
   lat: number
   lon: number
   direction_id: number
+}
+
+export interface CongestionHex {
+  h3_index: string
+  congestion_level: 'free_flow' | 'moderate' | 'congested' | 'severe'
+  avg_speed_mps: number | null
+  p10_speed_mps: number | null
 }
 
 // ── Supabase table shapes ──────────────────────────────────────────────────────
