@@ -270,3 +270,54 @@ export function singleRouteTrendSql(routeId: string, direction: 0 | 1 | 'both', 
     ORDER BY f.service_date
   `
 }
+
+// ── Schedule pivot (single day, trip × stop heatmap) ──────────────────────────
+// Returns one row per (trip, stop) observed on serviceDate.
+// canonical_seq anchors stop order to the most-observed trip for the direction.
+export function schedulePivotSql(routeId: string, direction: 0 | 1 | 'both', timepointOnly: boolean) {
+  const id = routeId.replace(/'/g, "''")
+  const dirFilter    = direction === 'both' ? '' : `AND f.direction_id = ${direction}`
+  const dirFilterRef = direction === 'both' ? '' : `AND direction_id = ${direction}`
+  const tpFilter     = timepointOnly
+    ? `AND f.stop_id IN (SELECT DISTINCT stop_id FROM silver_fact_stop_schedule WHERE timepoint = 1)`
+    : ''
+  return `
+    WITH ref_trip AS (
+      SELECT direction_id, trip_id FROM (
+        SELECT direction_id, trip_id, COUNT(*) AS cnt,
+          ROW_NUMBER() OVER (PARTITION BY direction_id ORDER BY COUNT(*) DESC) AS rn
+        FROM gold_stop_dwell_fact
+        WHERE service_date = :serviceDate
+          AND route_id = '${id}'
+          ${dirFilterRef}
+        GROUP BY direction_id, trip_id
+      ) t WHERE rn = 1
+    ),
+    canonical_seq AS (
+      SELECT f.direction_id, f.stop_id, MIN(f.stop_sequence) AS seq
+      FROM gold_stop_dwell_fact f
+      INNER JOIN ref_trip rt ON f.trip_id = rt.trip_id AND f.direction_id = rt.direction_id
+      WHERE f.service_date = :serviceDate
+      GROUP BY f.direction_id, f.stop_id
+    )
+    SELECT
+      f.direction_id,
+      f.trip_id,
+      f.stop_id,
+      COALESCE(s.stop_name, f.stop_id)      AS stop_name,
+      COALESCE(cs.seq, f.stop_sequence)      AS canonical_seq,
+      f.scheduled_arrival_ts,
+      f.actual_arrival_ts,
+      f.arrival_delay_seconds
+    FROM gold_stop_dwell_fact f
+    LEFT JOIN silver_dim_stop s ON f.stop_id = s.stop_id
+    LEFT JOIN canonical_seq cs
+      ON f.stop_id = cs.stop_id AND f.direction_id = cs.direction_id
+    WHERE f.service_date = :serviceDate
+      AND f.route_id = '${id}'
+      AND f.actual_arrival_ts IS NOT NULL
+    ${dirFilter}
+    ${tpFilter}
+    ORDER BY f.direction_id, f.trip_id, canonical_seq
+  `
+}

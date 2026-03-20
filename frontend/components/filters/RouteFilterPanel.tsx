@@ -43,6 +43,9 @@ interface Props {
   // Optional terminal-stop exclusion toggle (shown when both props provided)
   excludeTerminals?: boolean
   onExcludeTerminalsChange?: (v: boolean) => void
+  // When provided, replaces the date range section with a single service-date picker
+  scheduleDate?: string
+  onScheduleDateChange?: (d: string) => void
 }
 
 export default function RouteFilterPanel({
@@ -55,6 +58,8 @@ export default function RouteFilterPanel({
   onPresetChange,
   excludeTerminals,
   onExcludeTerminalsChange,
+  scheduleDate,
+  onScheduleDateChange,
 }: Props) {
   const { mode, groupName, routeId, startDate, endDate, direction, timepointOnly } = filters
 
@@ -104,40 +109,52 @@ export default function RouteFilterPanel({
         </FilterSection>
       )}
 
-      {/* Date range */}
-      <FilterSection label="Date Range">
-        <div className="flex rounded-lg overflow-hidden border border-gray-700 text-xs">
-          {(['1d', '7d', '14d', '28d'] as DatePreset[]).map((p) => (
-            <button
-              key={p}
-              onClick={() => onPresetChange(p)}
-              className={cn(
-                'flex-1 py-2 font-medium transition-colors',
-                activePreset === p
-                  ? 'bg-violet-600 text-white'
-                  : 'bg-gray-800 text-gray-400 hover:text-white'
-              )}
-            >
-              {p === '1d' ? 'Yesterday' : p}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1 mt-1.5">
+      {/* Date range — hidden when schedule mode provides its own single date */}
+      {scheduleDate !== undefined ? (
+        <FilterSection label="Service Date">
           <input
             type="date"
-            value={startDate}
-            onChange={(e) => update({ startDate: e.target.value })}
-            className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white text-xs focus:outline-none focus:ring-1 focus:ring-violet-500"
+            value={scheduleDate}
+            onChange={(e) => onScheduleDateChange?.(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white text-xs focus:outline-none focus:ring-1 focus:ring-violet-500"
           />
-          <span className="text-gray-600 text-xs shrink-0">→</span>
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => update({ endDate: e.target.value })}
-            className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white text-xs focus:outline-none focus:ring-1 focus:ring-violet-500"
-          />
-        </div>
-      </FilterSection>
+          <p className="text-xs text-gray-600 mt-1 leading-snug">Single day — switch tabs to use date range</p>
+        </FilterSection>
+      ) : (
+        <FilterSection label="Date Range">
+          <div className="flex rounded-lg overflow-hidden border border-gray-700 text-xs">
+            {(['1d', '7d', '14d', '28d'] as DatePreset[]).map((p) => (
+              <button
+                key={p}
+                onClick={() => onPresetChange(p)}
+                className={cn(
+                  'flex-1 py-2 font-medium transition-colors',
+                  activePreset === p
+                    ? 'bg-violet-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:text-white'
+                )}
+              >
+                {p === '1d' ? 'Yesterday' : p}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1 mt-1.5">
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => update({ startDate: e.target.value })}
+              className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white text-xs focus:outline-none focus:ring-1 focus:ring-violet-500"
+            />
+            <span className="text-gray-600 text-xs shrink-0">→</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => update({ endDate: e.target.value })}
+              className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white text-xs focus:outline-none focus:ring-1 focus:ring-violet-500"
+            />
+          </div>
+        </FilterSection>
+      )}
 
       {/* Direction (all modes when showDirection=true) */}
       {showDirection && (

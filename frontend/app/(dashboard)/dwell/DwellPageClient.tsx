@@ -28,21 +28,19 @@ export interface DwellFilterState extends OtpFilterState {
 // ── Dwell severity color scale ─────────────────────────────────────────────────
 
 const BUCKET_COLORS: Record<string, string> = {
-  'Fast (<15s)':       '#4b5563',
-  'Normal (15-30s)':   '#4ade80',
-  'Slow (30-60s)':     '#facc15',
+  'Normal (<60s)':     '#4ade80',
   'High Pax (60-120s)':'#fb923c',
   'Outlier (120s+)':   '#ef4444',
 }
-const BUCKET_ORDER = ['Fast (<15s)', 'Normal (15-30s)', 'Slow (30-60s)', 'High Pax (60-120s)', 'Outlier (120s+)']
+const BUCKET_ORDER = ['Normal (<60s)', 'High Pax (60-120s)', 'Outlier (120s+)']
 
 function cellColor(sec: number | null): string {
   if (sec === null) return '#111827'
   if (sec < 15)  return '#374151'  // gray-700: barely stopped
-  if (sec < 30)  return '#15803d'  // green-700: normal dwell
-  if (sec < 60)  return '#a16207'  // yellow-700: slow boarding
-  if (sec < 120) return '#c2410c'  // orange-700: high pax demand
-  return '#b91c1c'                 // red-700: outlier / wheelchair / incident
+  if (sec < 30)  return '#374151'  // gray-700: <30s (inferred table records ≥30s only)
+  if (sec < 60)  return '#d97706'  // amber-600: slow boarding
+  if (sec < 120) return '#ea580c'  // orange-600: high pax demand
+  return '#dc2626'                 // red-600: outlier / wheelchair / incident
 }
 
 function p90Color(sec: number): string {
@@ -161,7 +159,7 @@ export default function DwellPageClient() {
         safe(fetchJson(dwellBucketSql(null, routeId, direction, timepointOnly, excludeTerminals), params)),
         safe(fetchJson(topInflationStopsSql(null, routeId, direction, timepointOnly, excludeTerminals, 15), params)),
         safe(fetchJson(stopProfileSql(routeId, direction, excludeTerminals), params)),
-        safe(fetchJson(tripMatrixSql(routeId, direction, excludeTerminals), { startDate: f.endDate, endDate: f.endDate })),
+        safe(fetchJson(tripMatrixSql(routeId, direction, excludeTerminals), params)),
         safe(fetchJson(dwellTodSql(null, routeId, direction, excludeTerminals), params)),
         safe(fetchJson(dwellTrendSql(null, routeId, excludeTerminals), trendParams)),
       ])
@@ -297,12 +295,10 @@ export default function DwellPageClient() {
               <ByRouteTab rows={byRouteData} />
             )}
             {activeTab === 'stop-profile' && (
-              <StopProfileTab profileData={profileData} direction={filters.direction} />
+              <StopProfileTab profileData={profileData} direction={filters.direction} startDate={filters.startDate} endDate={filters.endDate} />
             )}
             {activeTab === 'trip-matrix' && (
-              <div className="p-6">
-                <TripMatrix data={matrixData} endDate={filters.endDate} />
-              </div>
+              <TripMatrixTab matrixData={matrixData} direction={filters.direction} startDate={filters.startDate} endDate={filters.endDate} />
             )}
             {activeTab === 'time-of-day' && (
               <TimeOfDayTab data={todData} />
@@ -331,7 +327,7 @@ function SummaryTab({
 
   const p50 = toNum(summary.p50_actual_sec)
   const p90 = toNum(summary.p90_actual_sec)
-  const avgDelta = toNum(summary.avg_delta_sec)
+  const avg = toNum(summary.avg_actual_sec)
   const over2min = toNum(summary.stops_over_2min)
   const fourthLabel = mode === 'single' ? 'Observations' : 'Routes'
   const fourthValue = mode === 'single'
@@ -351,10 +347,10 @@ function SummaryTab({
     <div className="p-6 space-y-6">
       {/* KPI row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <KpiCard label="p50 Dwell"     value={`${p50}s`}  color={p90Color(p50)} sub="median actual" />
-        <KpiCard label="p90 Dwell"     value={`${p90}s`}  color={p90Color(p90)} sub="90th percentile" />
-        <KpiCard label="Avg Delta"     value={`${avgDelta >= 0 ? '+' : ''}${avgDelta}s`} sub="vs scheduled" />
-        <KpiCard label={fourthLabel}   value={fourthValue} />
+        <KpiCard label="p50 Dwell"   value={`${p50}s`}  color={p90Color(p50)} sub="median VP-inferred" />
+        <KpiCard label="p90 Dwell"   value={`${p90}s`}  color={p90Color(p90)} sub="90th percentile" />
+        <KpiCard label="Avg Dwell"   value={`${avg}s`}  color={p90Color(avg)} sub="VP-inferred" />
+        <KpiCard label={fourthLabel} value={fourthValue} />
       </div>
 
       {/* Charts row */}
@@ -507,16 +503,26 @@ function ByRouteTab({ rows }: { rows: any[] }) {
 
 // ── Stop Profile tab ───────────────────────────────────────────────────────────
 
+function barColor(sec: number): string {
+  if (sec < 30)  return '#4b5563'
+  if (sec < 60)  return '#d97706'
+  if (sec < 120) return '#ea580c'
+  return '#dc2626'
+}
+
 function StopProfileTab({
-  profileData, direction,
+  profileData, direction, startDate, endDate,
 }: {
   profileData: any[]
   direction: 0 | 1 | 'both'
+  startDate: string
+  endDate: string
 }) {
   if (profileData.length === 0) return <EmptyState />
 
-  // Group profile by direction
   const dirs = direction === 'both' ? [0, 1] : [direction as number]
+  const dateRangeLabel = startDate === endDate ? endDate : `${startDate} → ${endDate}`
+
   const grouped = dirs.map((d) => ({
     dirId: d,
     label: profileData.find((r) => toNum(r.direction_id) === d)?.direction_label ?? `Dir ${d}`,
@@ -526,31 +532,43 @@ function StopProfileTab({
   })).filter((g) => g.rows.length > 0)
 
   return (
-    <div className="p-6 space-y-8">
-      {/* Stop sequence bar charts per direction */}
+    <div className="p-6 space-y-6">
       {grouped.map(({ dirId, label, rows }) => (
         <div key={dirId} className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">
-            {dirId === 0 ? `${label} →` : `← ${label}`} — Avg Dwell by Stop
-          </h3>
-          <p className="text-xs text-gray-600 mb-4">VP-inferred · ordered by stop sequence · terminal stops excluded when filter active</p>
-          <ResponsiveContainer width="100%" height={Math.max(320, rows.length * 30)}>
-            <BarChart data={rows} layout="vertical" margin={{ top: 0, right: 48, left: 0, bottom: 0 }}>
+          <div className="flex items-start justify-between mb-3">
+            <div>
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                {dirId === 0 ? `${label} →` : `← ${label}`}
+              </h3>
+              <p className="text-xs text-gray-600 mt-0.5">
+                Avg dwell per stop · {dateRangeLabel} · stop sequence order
+              </p>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-gray-500 shrink-0 ml-4">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: '#d97706' }} />30-60s</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: '#ea580c' }} />60-120s</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: '#dc2626' }} />120s+</span>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={Math.max(280, rows.length * 22)}>
+            <BarChart data={rows} layout="vertical" margin={{ top: 0, right: 56, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" horizontal={false} />
               <XAxis type="number" tick={{ fill: '#6b7280', fontSize: 10 }} tickLine={false} axisLine={false}
                 tickFormatter={(v) => `${v}s`} />
               <YAxis type="category" dataKey="stop_name" width={220}
-                tick={{ fill: '#9ca3af', fontSize: 10 }}
-                tickLine={false} axisLine={false}
+                tick={{ fill: '#9ca3af', fontSize: 10 }} tickLine={false} axisLine={false}
                 tickFormatter={(v: string) => v.length > 30 ? v.slice(0, 30) + '…' : v}
               />
               <Tooltip
                 contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 }}
-                labelStyle={{ color: '#9ca3af' }}
-                formatter={(v: any, name: any) => [`${v}s`, name === 'avg_dwell_sec' ? 'Avg' : 'p90']}
+                labelStyle={{ color: '#d1d5db' }}
+                formatter={(v: any) => [`${v}s`, 'Avg Dwell']}
               />
-              <Bar dataKey="avg_dwell_sec" name="avg_dwell_sec" fill="#a78bfa" radius={[0, 3, 3, 0]} maxBarSize={12} />
-              <Bar dataKey="p90_dwell_sec" name="p90_dwell_sec" fill="#f59e0b" radius={[0, 3, 3, 0]} maxBarSize={12} />
+              <Bar dataKey="avg_dwell_sec" name="avg_dwell_sec" radius={[0, 3, 3, 0]} maxBarSize={14}>
+                {rows.map((r, i) => (
+                  <Cell key={i} fill={barColor(toNum(r.avg_dwell_sec))} />
+                ))}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -559,17 +577,42 @@ function StopProfileTab({
   )
 }
 
+// ── Trip Matrix tab ─────────────────────────────────────────────────────────────
+
+function TripMatrixTab({
+  matrixData, direction, startDate, endDate,
+}: {
+  matrixData: any[]
+  direction: 0 | 1 | 'both'
+  startDate: string
+  endDate: string
+}) {
+  if (matrixData.length === 0) return <EmptyState />
+  const dirs = direction === 'both' ? [0, 1] : [direction as number]
+  const activeDirs = dirs.filter((d) => matrixData.some((r) => toNum(r.direction_id) === d))
+  return (
+    <div className="p-6 space-y-6">
+      {activeDirs.map((d) => (
+        <TripMatrix key={d} data={matrixData} dirId={d} startDate={startDate} endDate={endDate} />
+      ))}
+    </div>
+  )
+}
+
 // ── Trip × Stop heatmap ────────────────────────────────────────────────────────
 
-function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
-  // Use first available direction if both present (most useful single view)
-  const dirs = [...new Set(data.map((r) => toNum(r.direction_id)))].sort()
-  const [selectedDir, setSelectedDir] = useState<number>(dirs[0] ?? 0)
+function TripMatrix({
+  data, dirId, startDate, endDate,
+}: {
+  data: any[]
+  dirId: number
+  startDate: string
+  endDate: string
+}) {
+  const dirData = data.filter((r) => toNum(r.direction_id) === dirId)
+  const dirLabel = dirData[0]?.direction_label ?? `Dir ${dirId}`
 
-  const dirData = data.filter((r) => toNum(r.direction_id) === selectedDir)
-  const dirLabel = dirData[0]?.direction_label ?? `Dir ${selectedDir}`
-
-  // Build unique stops sorted by sequence (cap at 30)
+  // All unique stops sorted by sequence — no cap
   const stopSeqs: [number, string][] = []
   const seenSeqs = new Set<number>()
   for (const r of dirData) {
@@ -577,54 +620,36 @@ function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
     if (!seenSeqs.has(seq)) { seenSeqs.add(seq); stopSeqs.push([seq, r.stop_name ?? r.stop_id]) }
   }
   stopSeqs.sort((a, b) => a[0] - b[0])
-  const stops = stopSeqs.slice(0, 30)
+  const stops = stopSeqs  // all stops, no cap
 
-  // Unique trips (cap at 40)
-  const trips = [...new Set(dirData.map((r) => r.trip_id as string))].slice(0, 40)
+  // All unique trips, sorted
+  const trips = [...new Set(dirData.map((r) => r.trip_id as string))].sort()
 
   // Lookup
   const lookup = new Map<string, number>()
-  for (const r of dirData) lookup.set(`${r.trip_id}:${r.stop_sequence}`, toNum(r.dwell_seconds))
+  for (const r of dirData) lookup.set(`${r.trip_id}:${r.stop_sequence}`, toNum(r.avg_dwell_sec))
 
-  const CELL_W = 32
-  const CELL_H = 26
+  const CELL_W = 16
+  const CELL_H = 13
   const LABEL_W = 116
 
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-            Trip × Stop Matrix
-          </h3>
-          <p className="text-xs text-gray-600 mt-0.5">
-            {endDate} · {dirLabel} · {trips.length} trips · {stops.length} stops · VP-inferred dwell
-          </p>
-        </div>
-        {dirs.length > 1 && (
-          <div className="flex gap-1">
-            {dirs.map((d) => (
-              <button
-                key={d}
-                onClick={() => setSelectedDir(d)}
-                className={cn(
-                  'px-2 py-1 text-xs rounded font-medium transition-colors',
-                  d === selectedDir ? 'bg-violet-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
-                )}
-              >
-                {d === 0 ? 'Outbound' : 'Inbound'}
-              </button>
-            ))}
-          </div>
-        )}
+      <div className="mb-3">
+        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+          Trip × Stop Matrix — {dirId === 0 ? `${dirLabel} →` : `← ${dirLabel}`}
+        </h3>
+        <p className="text-xs text-gray-600 mt-0.5">
+          {startDate === endDate ? endDate : `${startDate} → ${endDate}`} · {trips.length} trips · {stops.length} stops · avg dwell · scroll → to see full route
+        </p>
       </div>
 
       {/* Color legend */}
       <div className="flex items-center gap-3 mb-3 flex-wrap">
         {[
-          { label: '30-60s',  color: '#a16207' },
-          { label: '60-120s', color: '#c2410c' },
-          { label: '120s+',   color: '#b91c1c' },
+          { label: '30-60s',  color: '#d97706' },
+          { label: '60-120s', color: '#ea580c' },
+          { label: '120s+',   color: '#dc2626' },
         ].map(({ label, color }) => (
           <span key={label} className="flex items-center gap-1 text-xs text-gray-400">
             <span className="inline-block w-3 h-3 rounded-sm" style={{ background: color }} />
@@ -635,12 +660,12 @@ function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
       </div>
 
       {trips.length === 0 ? (
-        <p className="text-gray-600 text-sm text-center py-6">No trip data for {endDate}</p>
+        <p className="text-gray-600 text-sm text-center py-6">No data for selected filters</p>
       ) : (
         <div className="overflow-auto">
           <div style={{ minWidth: LABEL_W + stops.length * CELL_W }}>
             {/* Stop header row — overflow:visible lets rotated labels extend upward freely */}
-            <div style={{ display: 'flex', alignItems: 'flex-end', height: 120, marginLeft: LABEL_W, overflow: 'visible', marginTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', height: 120, marginLeft: LABEL_W, overflow: 'visible', marginTop: 8 }}>
               {stops.map(([seq, name]) => (
                 <div
                   key={seq}
@@ -648,21 +673,24 @@ function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
                 >
                   <div style={{
                     position: 'absolute',
-                    bottom: 8,
-                    left: '50%',
-                    transform: 'translateX(-50%) rotate(-45deg)',
-                    transformOrigin: '50% 100%',
+                    bottom: 4,
+                    left: 0,
+                    width: CELL_W,
+                    textAlign: 'center',
+                    transform: 'rotate(-45deg)',
+                    transformOrigin: 'center bottom',
                     whiteSpace: 'nowrap',
-                    fontSize: 10,
+                    overflow: 'visible',
+                    fontSize: 9,
                     color: '#9ca3af',
                     lineHeight: 1,
                   }}>
-                    {name.length > 20 ? name.slice(0, 20) + '…' : name}
+                    {name.length > 22 ? name.slice(0, 22) + '…' : name}
                   </div>
                 </div>
               ))}
             </div>
-            {/* Spacer between header and data so rotated labels don't overlap row 1 */}
+            {/* Spacer between header and data */}
             <div style={{ height: 8, marginLeft: LABEL_W, borderBottom: '1px solid #1f2937' }} />
 
             {/* Data rows */}
@@ -671,7 +699,7 @@ function TripMatrix({ data, endDate }: { data: any[]; endDate: string }) {
                 {/* Trip label */}
                 <div style={{
                   width: LABEL_W, flexShrink: 0,
-                  fontSize: 11, color: '#9ca3af',
+                  fontSize: 10, color: '#9ca3af',
                   textAlign: 'right', paddingRight: 8,
                   overflow: 'hidden', whiteSpace: 'nowrap',
                 }}>
@@ -747,10 +775,9 @@ function TimeOfDayTab({ data }: { data: any[] }) {
         </ResponsiveContainer>
         {/* Reference lines annotation */}
         <div className="flex gap-6 mt-3 text-xs text-gray-600">
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#15803d' }} />≤30s normal</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#a16207' }} />30-60s slow</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#c2410c' }} />60-120s high pax</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#b91c1c' }} />120s+ outlier</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#4ade80' }} />&lt;60s normal</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#ea580c' }} />60-120s high pax</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#dc2626' }} />120s+ outlier</span>
         </div>
       </div>
     </div>

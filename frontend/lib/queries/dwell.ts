@@ -61,7 +61,9 @@ export const DWELL_GROUPS_SQL = `
   SELECT DISTINCT group_name FROM gold_route_groups ORDER BY group_name
 `
 
-// ── Summary KPIs (fact table) ─────────────────────────────────────────────────
+// ── Summary KPIs (VP-inferred) ────────────────────────────────────────────────
+// Uses gold_stop_dwell_inferred — actual_dwell_seconds from gold_stop_dwell_fact
+// is nearly always 0 (GTFS-RT does not report per-stop dwell reliably).
 
 export function dwellSummarySql(
   groupName: string | null,
@@ -70,32 +72,35 @@ export function dwellSummarySql(
   timepointOnly: boolean,
   excludeTerminals: boolean,
 ): string {
-  const t = terminals('gold_stop_dwell_fact', 'f', excludeTerminals)
-  const routeFilter = routeId ? `AND f.route_id = '${esc(routeId)}'` : ''
-  const gj = routeId ? '' : groupJoin(groupName)
+  const t = terminals('gold_stop_dwell_inferred', 'i', excludeTerminals)
+  const routeFilter = routeId ? `AND i.route_id = '${esc(routeId)}'` : ''
+  const gj = routeId ? '' : groupJoin(groupName, 'i')
+  const tp = timepointOnly
+    ? `AND i.stop_id IN (SELECT DISTINCT stop_id FROM silver_fact_stop_schedule WHERE timepoint = 1)`
+    : ''
   return `
     ${t.cte}
     SELECT
-      COUNT(DISTINCT f.route_id)                                          AS route_count,
+      COUNT(DISTINCT i.route_id)                                          AS route_count,
       COUNT(*)                                                            AS observation_count,
-      ROUND(AVG(f.actual_dwell_seconds), 0)                              AS avg_actual_sec,
-      ROUND(AVG(f.dwell_delta_seconds), 0)                               AS avg_delta_sec,
-      ROUND(PERCENTILE_APPROX(f.actual_dwell_seconds, 0.5), 0)           AS p50_actual_sec,
-      ROUND(PERCENTILE_APPROX(f.actual_dwell_seconds, 0.9), 0)           AS p90_actual_sec,
-      SUM(CASE WHEN f.actual_dwell_seconds > 120 THEN 1 ELSE 0 END)     AS stops_over_2min
-    FROM gold_stop_dwell_fact f
+      ROUND(AVG(i.dwell_seconds), 0)                                     AS avg_actual_sec,
+      ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.5), 0)                  AS p50_actual_sec,
+      ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.9), 0)                  AS p90_actual_sec,
+      SUM(CASE WHEN i.dwell_seconds > 120 THEN 1 ELSE 0 END)            AS stops_over_2min
+    FROM gold_stop_dwell_inferred i
     ${t.join}
     ${gj}
-    WHERE f.service_date >= :startDate AND f.service_date <= :endDate
-      AND f.actual_dwell_seconds IS NOT NULL
+    WHERE i.service_date >= :startDate AND i.service_date <= :endDate
     ${routeFilter}
-    ${dirWhere(direction)}
-    ${timepointWhere(timepointOnly)}
+    ${dirWhere(direction, 'i')}
+    ${tp}
     ${t.where}
   `
 }
 
-// ── Dwell distribution buckets (fact table) ───────────────────────────────────
+// ── Dwell distribution buckets (VP-inferred) ─────────────────────────────────
+// Inferred table only records ≥30s, so buckets start there.
+// <30s is merged into "Normal" since the inferred table won't have those events.
 
 export function dwellBucketSql(
   groupName: string | null,
@@ -104,36 +109,36 @@ export function dwellBucketSql(
   timepointOnly: boolean,
   excludeTerminals: boolean,
 ): string {
-  const t = terminals('gold_stop_dwell_fact', 'f', excludeTerminals)
-  const routeFilter = routeId ? `AND f.route_id = '${esc(routeId)}'` : ''
-  const gj = routeId ? '' : groupJoin(groupName)
+  const t = terminals('gold_stop_dwell_inferred', 'i', excludeTerminals)
+  const routeFilter = routeId ? `AND i.route_id = '${esc(routeId)}'` : ''
+  const gj = routeId ? '' : groupJoin(groupName, 'i')
+  const tp = timepointOnly
+    ? `AND i.stop_id IN (SELECT DISTINCT stop_id FROM silver_fact_stop_schedule WHERE timepoint = 1)`
+    : ''
   return `
     ${t.cte}
     SELECT
       CASE
-        WHEN f.actual_dwell_seconds < 15  THEN 'Fast (<15s)'
-        WHEN f.actual_dwell_seconds < 30  THEN 'Normal (15-30s)'
-        WHEN f.actual_dwell_seconds < 60  THEN 'Slow (30-60s)'
-        WHEN f.actual_dwell_seconds < 120 THEN 'High Pax (60-120s)'
+        WHEN i.dwell_seconds < 60  THEN 'Normal (<60s)'
+        WHEN i.dwell_seconds < 120 THEN 'High Pax (60-120s)'
         ELSE 'Outlier (120s+)'
       END                 AS dwell_bucket,
       COUNT(*)            AS stop_events,
       ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS pct_of_total
-    FROM gold_stop_dwell_fact f
+    FROM gold_stop_dwell_inferred i
     ${t.join}
     ${gj}
-    WHERE f.service_date >= :startDate AND f.service_date <= :endDate
-      AND f.actual_dwell_seconds IS NOT NULL
+    WHERE i.service_date >= :startDate AND i.service_date <= :endDate
     ${routeFilter}
-    ${dirWhere(direction)}
-    ${timepointWhere(timepointOnly)}
+    ${dirWhere(direction, 'i')}
+    ${tp}
     ${t.where}
     GROUP BY dwell_bucket
     ORDER BY dwell_bucket
   `
 }
 
-// ── Top N stops by dwell inflation (fact table) ───────────────────────────────
+// ── Top N stops by avg dwell (VP-inferred) ────────────────────────────────────
 
 export function topInflationStopsSql(
   groupName: string | null,
@@ -143,33 +148,33 @@ export function topInflationStopsSql(
   excludeTerminals: boolean,
   limit = 15,
 ): string {
-  const t = terminals('gold_stop_dwell_fact', 'f', excludeTerminals)
-  const routeFilter = routeId ? `AND f.route_id = '${esc(routeId)}'` : ''
-  const gj = routeId ? '' : groupJoin(groupName)
+  const t = terminals('gold_stop_dwell_inferred', 'i', excludeTerminals)
+  const routeFilter = routeId ? `AND i.route_id = '${esc(routeId)}'` : ''
+  const gj = routeId ? '' : groupJoin(groupName, 'i')
+  const tp = timepointOnly
+    ? `AND i.stop_id IN (SELECT DISTINCT stop_id FROM silver_fact_stop_schedule WHERE timepoint = 1)`
+    : ''
   return `
     ${t.cte}
     SELECT
-      f.stop_id,
-      COALESCE(s.stop_name, f.stop_id)                                   AS stop_name,
-      f.route_id,
+      i.stop_id,
+      COALESCE(s.stop_name, i.stop_id)                                   AS stop_name,
+      i.route_id,
       COUNT(*)                                                            AS observations,
-      ROUND(AVG(f.actual_dwell_seconds), 0)                              AS avg_actual_sec,
-      ROUND(AVG(f.dwell_delta_seconds), 0)                               AS avg_delta_sec,
-      ROUND(PERCENTILE_APPROX(f.actual_dwell_seconds, 0.9), 0)           AS p90_actual_sec
-    FROM gold_stop_dwell_fact f
-    LEFT JOIN silver_dim_stop s ON f.stop_id = s.stop_id
+      ROUND(AVG(i.dwell_seconds), 0)                                     AS avg_actual_sec,
+      ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.9), 0)                  AS p90_actual_sec
+    FROM gold_stop_dwell_inferred i
+    LEFT JOIN silver_dim_stop s ON i.stop_id = s.stop_id
     ${t.join}
     ${gj}
-    WHERE f.service_date >= :startDate AND f.service_date <= :endDate
-      AND f.actual_dwell_seconds IS NOT NULL
-      AND f.dwell_delta_seconds IS NOT NULL
+    WHERE i.service_date >= :startDate AND i.service_date <= :endDate
     ${routeFilter}
-    ${dirWhere(direction)}
-    ${timepointWhere(timepointOnly)}
+    ${dirWhere(direction, 'i')}
+    ${tp}
     ${t.where}
-    GROUP BY f.stop_id, COALESCE(s.stop_name, f.stop_id), f.route_id
+    GROUP BY i.stop_id, COALESCE(s.stop_name, i.stop_id), i.route_id
     HAVING observations >= 3
-    ORDER BY avg_delta_sec DESC
+    ORDER BY avg_actual_sec DESC
     LIMIT ${limit}
   `
 }
@@ -219,22 +224,49 @@ export function stopProfileSql(
 ): string {
   const id = esc(routeId)
   const dirFilter = dirWhere(direction, 'i')
+  const dirFilterRef = direction === 'both' ? '' : `AND direction_id = ${direction}`
 
   const ctes: string[] = []
+
   if (excludeTerminals) {
     ctes.push(`trip_bounds AS (
     SELECT trip_id, MIN(stop_sequence) AS first_seq, MAX(stop_sequence) AS last_seq
     FROM gold_stop_dwell_inferred
     WHERE service_date >= :startDate AND service_date <= :endDate
+      AND route_id = '${id}'
     GROUP BY trip_id
   )`)
   }
+
   ctes.push(`headsign AS (
     SELECT direction_id, trip_headsign,
       ROW_NUMBER() OVER (PARTITION BY direction_id ORDER BY COUNT(*) DESC) AS rn
     FROM silver_dim_trip
     WHERE route_id = '${id}'
     GROUP BY direction_id, trip_headsign
+  )`)
+
+  // Most-observed trip per direction = canonical stop order reference
+  ctes.push(`ref_trip AS (
+    SELECT direction_id, trip_id
+    FROM (
+      SELECT direction_id, trip_id, COUNT(*) AS cnt,
+        ROW_NUMBER() OVER (PARTITION BY direction_id ORDER BY COUNT(*) DESC) AS rn
+      FROM gold_stop_dwell_inferred
+      WHERE service_date >= :startDate AND service_date <= :endDate
+        AND route_id = '${id}'
+        ${dirFilterRef}
+      GROUP BY direction_id, trip_id
+    ) t WHERE rn = 1
+  )`)
+
+  // Canonical sequence per stop from that reference trip
+  ctes.push(`canonical_seq AS (
+    SELECT i.direction_id, i.stop_id, MIN(i.stop_sequence) AS seq
+    FROM gold_stop_dwell_inferred i
+    INNER JOIN ref_trip rt ON i.trip_id = rt.trip_id AND i.direction_id = rt.direction_id
+    WHERE i.service_date >= :startDate AND i.service_date <= :endDate
+    GROUP BY i.direction_id, i.stop_id
   )`)
 
   return `
@@ -244,7 +276,7 @@ export function stopProfileSql(
       COALESCE(h.trip_headsign, CONCAT('Dir ', CAST(i.direction_id AS STRING))) AS direction_label,
       i.stop_id,
       COALESCE(s.stop_name, i.stop_id)                                   AS stop_name,
-      MIN(i.stop_sequence)                                                AS stop_sequence,
+      COALESCE(cs.seq, MIN(i.stop_sequence))                             AS stop_sequence,
       COUNT(*)                                                            AS observations,
       ROUND(AVG(i.dwell_seconds), 0)                                     AS avg_dwell_sec,
       ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.5), 0)                  AS p50_dwell_sec,
@@ -253,21 +285,23 @@ export function stopProfileSql(
     ${excludeTerminals ? 'INNER JOIN trip_bounds tb ON i.trip_id = tb.trip_id' : ''}
     LEFT JOIN silver_dim_stop s ON i.stop_id = s.stop_id
     LEFT JOIN headsign h ON i.direction_id = h.direction_id AND h.rn = 1
+    LEFT JOIN canonical_seq cs ON i.stop_id = cs.stop_id AND i.direction_id = cs.direction_id
     WHERE i.service_date >= :startDate AND i.service_date <= :endDate
       AND i.route_id = '${id}'
     ${dirFilter}
     ${excludeTerminals ? 'AND i.stop_sequence != tb.first_seq AND i.stop_sequence != tb.last_seq' : ''}
     GROUP BY i.direction_id,
       COALESCE(h.trip_headsign, CONCAT('Dir ', CAST(i.direction_id AS STRING))),
-      i.stop_id, COALESCE(s.stop_name, i.stop_id)
+      i.stop_id, COALESCE(s.stop_name, i.stop_id), cs.seq
     HAVING observations >= 3
-    ORDER BY i.direction_id, MIN(i.stop_sequence)
+    ORDER BY i.direction_id, COALESCE(cs.seq, MIN(i.stop_sequence))
   `
 }
 
-// ── Trip × Stop matrix (inferred, single route, single date = :endDate) ───────
-// Raw rows: (trip_id, direction_id, stop_sequence, stop_name, dwell_seconds)
-// Caller pivots client-side. Capped at :endDate only (one service day).
+// ── Trip × Stop matrix (inferred, single route, aggregated over date range) ───
+// Groups by (trip_id, stop_sequence) across the full date range — trip_ids repeat
+// daily in GTFS scheduled service, so AVG dwell gives the typical pattern per trip
+// over the selected period. Caller pivots client-side.
 
 export function tripMatrixSql(
   routeId: string,
@@ -282,7 +316,8 @@ export function tripMatrixSql(
     ctes.push(`trip_bounds AS (
     SELECT trip_id, MIN(stop_sequence) AS first_seq, MAX(stop_sequence) AS last_seq
     FROM gold_stop_dwell_inferred
-    WHERE service_date = :endDate
+    WHERE service_date >= :startDate AND service_date <= :endDate
+      AND route_id = '${id}'
     GROUP BY trip_id
   )`)
   }
@@ -303,15 +338,20 @@ export function tripMatrixSql(
       i.stop_sequence,
       i.stop_id,
       COALESCE(s.stop_name, i.stop_id)                                   AS stop_name,
-      i.dwell_seconds
+      ROUND(AVG(i.dwell_seconds), 0)                                     AS avg_dwell_sec,
+      COUNT(DISTINCT i.service_date)                                     AS days_observed
     FROM gold_stop_dwell_inferred i
     ${excludeTerminals ? 'INNER JOIN trip_bounds tb ON i.trip_id = tb.trip_id' : ''}
     LEFT JOIN silver_dim_stop s ON i.stop_id = s.stop_id
     LEFT JOIN headsign h ON i.direction_id = h.direction_id AND h.rn = 1
-    WHERE i.service_date = :endDate
+    WHERE i.service_date >= :startDate AND i.service_date <= :endDate
       AND i.route_id = '${id}'
     ${dirFilter}
     ${excludeTerminals ? 'AND i.stop_sequence != tb.first_seq AND i.stop_sequence != tb.last_seq' : ''}
+    GROUP BY i.trip_id, i.direction_id,
+      COALESCE(h.trip_headsign, CONCAT('Dir ', CAST(i.direction_id AS STRING))),
+      i.stop_sequence, i.stop_id, COALESCE(s.stop_name, i.stop_id)
+    HAVING days_observed >= 1
     ORDER BY i.direction_id, i.trip_id, i.stop_sequence
   `
 }

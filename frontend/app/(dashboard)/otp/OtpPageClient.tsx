@@ -18,6 +18,7 @@ import {
   summaryAllSql, otpTrendSql, routesTableSql,
   singleRouteSummarySql, timeOfDaySql, stopOtpSql,
   delayHistogramSql, singleRouteTrendSql, routeHeadsignSql,
+  schedulePivotSql,
 } from '@/lib/queries/otp'
 import { cn } from '@/lib/utils'
 
@@ -52,7 +53,7 @@ async function fetchJson(sql: string, params: Record<string, string> = {}) {
 }
 
 // ── Tab definitions ────────────────────────────────────────────────────────────
-type TabId = 'summary' | 'routes' | 'time-of-day' | 'histogram' | 'stops'
+type TabId = 'summary' | 'routes' | 'time-of-day' | 'histogram' | 'stops' | 'schedule'
 
 const ALL_TABS: { id: TabId; label: string; modes: OtpFilterState['mode'][] }[] = [
   { id: 'summary',     label: 'Summary',     modes: ['all', 'group', 'single'] },
@@ -60,6 +61,7 @@ const ALL_TABS: { id: TabId; label: string; modes: OtpFilterState['mode'][] }[] 
   { id: 'time-of-day', label: 'Time of Day', modes: ['single'] },
   { id: 'histogram',   label: 'Histogram',   modes: ['single'] },
   { id: 'stops',       label: 'Stops',       modes: ['single'] },
+  { id: 'schedule',    label: 'Schedule',    modes: ['single'] },
 ]
 
 // ── Main page ──────────────────────────────────────────────────────────────────
@@ -89,6 +91,12 @@ export default function OtpPageClient() {
   const [stopsData, setStopsData] = useState<any[]>([])
   const [histData, setHistData] = useState<any[]>([])
   const [headsigns, setHeadsigns] = useState<Record<number, string>>({})
+  const [excludeTerminals, setExcludeTerminals] = useState(false)
+  const [scheduleDate, setScheduleDate] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 1)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -186,9 +194,15 @@ export default function OtpPageClient() {
         groups={groups}
         activePreset={preset}
         onPresetChange={handlePresetChange}
+        excludeTerminals={excludeTerminals}
+        onExcludeTerminalsChange={setExcludeTerminals}
+        {...(activeTab === 'schedule' ? {
+          scheduleDate,
+          onScheduleDateChange: setScheduleDate,
+        } : {})}
       />
     ),
-    [filters, routes, groups, preset] // eslint-disable-line react-hooks/exhaustive-deps
+    [filters, routes, groups, preset, excludeTerminals, activeTab, scheduleDate] // eslint-disable-line react-hooks/exhaustive-deps
   )
   useEffect(() => { setContentRef.current(filterNode) }, [filterNode])
 
@@ -202,9 +216,11 @@ export default function OtpPageClient() {
     return 'All Routes'
   }, [filters, routes])
 
-  const dateLabel = filters.startDate === filters.endDate
-    ? filters.endDate
-    : `${filters.startDate} → ${filters.endDate}`
+  const dateLabel = activeTab === 'schedule'
+    ? scheduleDate
+    : filters.startDate === filters.endDate
+      ? filters.endDate
+      : `${filters.startDate} → ${filters.endDate}`
 
   const needsSelection =
     (filters.mode === 'group' && !filters.groupName) ||
@@ -264,7 +280,7 @@ export default function OtpPageClient() {
           <div className="flex items-center justify-center h-64 text-gray-600 text-sm">
             {filters.mode === 'group' ? 'Select a route group to view data' : 'Select a route to view data'}
           </div>
-        ) : loading ? (
+        ) : loading && activeTab !== 'schedule' ? (
           <LoadingSkeleton />
         ) : (
           <>
@@ -282,6 +298,16 @@ export default function OtpPageClient() {
             )}
             {activeTab === 'stops' && (
               <StopsTab data={stopsData} direction={filters.direction} headsigns={headsigns} />
+            )}
+            {activeTab === 'schedule' && filters.routeId && (
+              <ScheduleTab
+                routeId={filters.routeId}
+                direction={filters.direction}
+                timepointOnly={filters.timepointOnly}
+                excludeTerminals={excludeTerminals}
+                serviceDate={scheduleDate}
+                headsigns={headsigns}
+              />
             )}
           </>
         )}
@@ -681,6 +707,261 @@ function KpiCard({ label, value, sub, color }: { label: string; value: string; s
       {sub && <div className="text-xs text-gray-500 mt-0.5">{sub}</div>}
     </div>
   )
+}
+
+// ── Schedule tab — trip × stop pivot heatmap ───────────────────────────────────
+
+function ScheduleTab({
+  routeId,
+  direction,
+  timepointOnly,
+  excludeTerminals,
+  serviceDate,
+  headsigns,
+}: {
+  routeId: string
+  direction: 0 | 1 | 'both'
+  timepointOnly: boolean
+  excludeTerminals: boolean
+  serviceDate: string
+  headsigns: Record<number, string>
+}) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!routeId) return
+    setLoading(true)
+    setError(null)
+    fetchJson(schedulePivotSql(routeId, direction, timepointOnly), { serviceDate })
+      .then(setRows)
+      .catch((e: any) => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [routeId, direction, timepointOnly, serviceDate])
+
+  const dirIds = direction === 'both' ? [0, 1] : [direction as number]
+
+  const CELL_W = 48
+  const CELL_H = 24
+  const HEADER_H = 150
+  const ROW_LABEL_W = 58
+
+  return (
+    <div className="p-4 space-y-4">
+      {loading && (
+        <p className="text-xs text-gray-500 animate-pulse">Loading {serviceDate}…</p>
+      )}
+
+      {error && (
+        <div className="text-red-400 text-sm bg-red-900/20 border border-red-800 rounded-lg px-4 py-3">
+          {error}
+        </div>
+      )}
+
+      {/* Legend */}
+      {!loading && rows.length > 0 && (
+        <div className="flex items-center gap-3 text-xs text-gray-400 flex-wrap">
+          <span className="font-medium text-gray-300">Arrival Delay:</span>
+          {[
+            { label: '4+ min early', bg: '#be185d' },
+            { label: '1–4 min early', bg: '#f472b6' },
+            { label: 'On-time', bg: '#1f2937', border: true },
+            { label: '6–10 min late', bg: '#d97706' },
+            { label: '10+ min late', bg: '#dc2626' },
+          ].map((s) => (
+            <span key={s.label} className="flex items-center gap-1">
+              <span
+                className="inline-block w-3 h-3 rounded-sm"
+                style={{ background: s.bg, border: s.border ? '1px solid #374151' : 'none' }}
+              />
+              {s.label}
+            </span>
+          ))}
+          <span className="text-gray-600 ml-2">Row = trip start · Column = stop · Cell = +M:SS (early) / −M:SS (late)</span>
+        </div>
+      )}
+
+      {!loading && rows.length === 0 && !error && <EmptyState />}
+
+      {!loading && dirIds.map((dirId) => {
+        const dirRows = rows.filter((r) => toNum(r.direction_id) === dirId)
+        if (dirRows.length === 0) return null
+
+        // Unique stops sorted by canonical_seq
+        const stopMap = new Map<string, { stop_name: string; canonical_seq: number }>()
+        for (const r of dirRows) {
+          if (!stopMap.has(r.stop_id)) {
+            stopMap.set(r.stop_id, { stop_name: r.stop_name, canonical_seq: toNum(r.canonical_seq) })
+          }
+        }
+        const allStops = Array.from(stopMap.entries())
+          .sort((a, b) => a[1].canonical_seq - b[1].canonical_seq)
+          .map(([stop_id, info]) => ({ stop_id, ...info }))
+        const stops = excludeTerminals && allStops.length > 2
+          ? allStops.slice(1, allStops.length - 1)
+          : allStops
+
+        // Unique trips sorted by first scheduled_arrival_ts
+        const tripFirstTs = new Map<string, string>()
+        for (const r of dirRows) {
+          const ts = r.scheduled_arrival_ts ?? ''
+          if (!tripFirstTs.has(r.trip_id) || ts < tripFirstTs.get(r.trip_id)!) {
+            tripFirstTs.set(r.trip_id, ts)
+          }
+        }
+        const trips = Array.from(tripFirstTs.entries())
+          .sort((a, b) => a[1].localeCompare(b[1]))
+          .map(([trip_id, firstTs]) => ({ trip_id, firstTs }))
+
+        // Lookup: trip_id → stop_id → delay seconds
+        const lookup = new Map<string, Map<string, number | null>>()
+        for (const r of dirRows) {
+          if (!lookup.has(r.trip_id)) lookup.set(r.trip_id, new Map())
+          const delay = r.arrival_delay_seconds != null ? toNum(r.arrival_delay_seconds) : null
+          lookup.get(r.trip_id)!.set(r.stop_id, delay)
+        }
+
+        const headsign = headsigns[dirId]
+        const dirHeading = dirId === 0
+          ? `${headsign ?? 'Outbound'} →`
+          : `← ${headsign ?? 'Inbound'}`
+
+        return (
+          <div key={dirId} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+            <div className="px-4 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-800">
+              {dirHeading}
+            </div>
+            <p className="px-4 pt-2 pb-1 text-xs text-gray-600">
+              {trips.length} trips · {stops.length} stops
+            </p>
+            <div className="overflow-x-auto">
+              <div style={{ minWidth: ROW_LABEL_W + stops.length * CELL_W + 16 }}>
+                {/* Column headers — rotated stop names */}
+                <div style={{ display: 'flex', paddingLeft: ROW_LABEL_W, height: HEADER_H }}>
+                  {stops.map((stop) => (
+                    <div
+                      key={stop.stop_id}
+                      style={{ width: CELL_W, flexShrink: 0, position: 'relative', height: HEADER_H }}
+                    >
+                      <div
+                        style={{
+                          position: 'absolute',
+                          bottom: 8,
+                          left: 0,
+                          width: CELL_W,
+                          textAlign: 'center',
+                          transform: 'rotate(-45deg)',
+                          transformOrigin: 'center bottom',
+                          fontSize: 9,
+                          color: '#9ca3af',
+                          whiteSpace: 'nowrap',
+                          overflow: 'visible',
+                          pointerEvents: 'none',
+                        }}
+                      >
+                        {stop.stop_name.length > 22 ? stop.stop_name.slice(0, 22) + '…' : stop.stop_name}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Separator */}
+                <div style={{ height: 10, marginLeft: ROW_LABEL_W, borderBottom: '2px solid #374151' }} />
+
+                {/* Trip rows */}
+                {trips.map(({ trip_id, firstTs }) => {
+                  const stopLookup = lookup.get(trip_id) ?? new Map()
+                  return (
+                    <div key={trip_id} style={{ display: 'flex', alignItems: 'center', height: CELL_H }}>
+                      {/* Row label: trip's first scheduled arrival in Phoenix time */}
+                      <div
+                        style={{
+                          width: ROW_LABEL_W,
+                          flexShrink: 0,
+                          textAlign: 'right',
+                          paddingRight: 8,
+                          fontSize: 10,
+                          color: '#6b7280',
+                          fontVariantNumeric: 'tabular-nums',
+                        }}
+                      >
+                        {formatScheduleTime(firstTs)}
+                      </div>
+
+                      {/* Delay cells */}
+                      {stops.map((stop) => {
+                        const delay = stopLookup.has(stop.stop_id) ? stopLookup.get(stop.stop_id)! : null
+                        const { bg, text } = scheduleDelayColor(delay)
+                        return (
+                          <div
+                            key={stop.stop_id}
+                            style={{
+                              width: CELL_W,
+                              height: CELL_H,
+                              flexShrink: 0,
+                              background: bg,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: 9,
+                              color: text,
+                              fontVariantNumeric: 'tabular-nums',
+                              borderLeft: '1px solid #111827',
+                              borderBottom: '1px solid #111827',
+                            }}
+                            title={
+                              delay !== null
+                                ? `${stop.stop_name}: ${formatDelay(delay)}`
+                                : `${stop.stop_name}: no data`
+                            }
+                          >
+                            {delay !== null ? formatDelay(delay) : ''}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function scheduleDelayColor(sec: number | null): { bg: string; text: string } {
+  if (sec === null) return { bg: '#111827', text: '#374151' }
+  if (sec < -240)  return { bg: '#be185d', text: '#fce7f3' }  // 4+ min early
+  if (sec < -60)   return { bg: '#f472b6', text: '#831843' }  // 1-4 min early
+  if (sec <= 360)  return { bg: '#1f2937', text: '#6b7280' }  // on-time
+  if (sec <= 600)  return { bg: '#d97706', text: '#fff7ed' }  // 6-10 min late
+  return             { bg: '#dc2626', text: '#fef2f2' }       // 10+ min late
+}
+
+function formatDelay(sec: number | null): string {
+  if (sec === null) return ''
+  const abs = Math.abs(Math.round(sec))
+  const m = Math.floor(abs / 60)
+  const s = abs % 60
+  const sign = sec >= 0 ? '+' : '-'
+  return `${sign}${m}:${s.toString().padStart(2, '0')}`
+}
+
+function formatScheduleTime(ts: string): string {
+  // ts is a UTC timestamp; Phoenix = UTC-7 (Arizona has no DST)
+  try {
+    const d = new Date(ts)
+    const phoenixMs = d.getTime() - 7 * 3600 * 1000
+    const pd = new Date(phoenixMs)
+    const h = pd.getUTCHours().toString().padStart(2, '0')
+    const m = pd.getUTCMinutes().toString().padStart(2, '0')
+    return `${h}:${m}`
+  } catch {
+    return ts?.slice(11, 16) ?? ''
+  }
 }
 
 function EmptyState() {
