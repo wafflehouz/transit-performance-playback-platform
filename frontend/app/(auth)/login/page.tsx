@@ -3,24 +3,41 @@
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
+type Mode = 'password' | 'magic'
+
 export default function LoginPage() {
+  const [mode, setMode] = useState<Mode>('password')
   const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [sent, setSent] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
   const supabase = createClient()
 
-  async function handleLogin(e: React.FormEvent) {
+  async function handlePasswordLogin(e: React.FormEvent) {
+    e.preventDefault()
+    setLoading(true)
+    setError(null)
+
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+
+    if (error) {
+      setError(error.message)
+    } else {
+      window.location.href = '/'
+    }
+    setLoading(false)
+  }
+
+  async function handleMagicLink(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
     setError(null)
 
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/api/auth/callback`,
-      },
+      options: { emailRedirectTo: `${window.location.origin}/api/auth/callback` },
     })
 
     if (error) {
@@ -59,36 +76,79 @@ export default function LoginPage() {
               <p className="text-gray-400 text-sm">
                 We sent a magic link to <span className="text-gray-200">{email}</span>
               </p>
+              <button
+                onClick={() => { setSent(false); setMode('password') }}
+                className="mt-4 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                Back to sign in
+              </button>
             </div>
           ) : (
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-1.5">
-                  Work email
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="planner@valleymetro.org"
-                  required
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+            <>
+              {/* Mode toggle */}
+              <div className="flex rounded-lg bg-gray-800 p-0.5 mb-5">
+                <button
+                  onClick={() => { setMode('password'); setError(null) }}
+                  className={`flex-1 text-sm py-1.5 rounded-md font-medium transition-colors ${
+                    mode === 'password' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  Password
+                </button>
+                <button
+                  onClick={() => { setMode('magic'); setError(null) }}
+                  className={`flex-1 text-sm py-1.5 rounded-md font-medium transition-colors ${
+                    mode === 'magic' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  Magic link
+                </button>
               </div>
 
-              {error && (
-                <p className="text-red-400 text-sm">{error}</p>
-              )}
+              <form onSubmit={mode === 'password' ? handlePasswordLogin : handleMagicLink} className="space-y-4">
+                <div>
+                  <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-1.5">
+                    Email
+                  </label>
+                  <input
+                    id="email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@valleymetro.org"
+                    required
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
 
-              <button
-                type="submit"
-                disabled={loading || !email}
-                className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/40 disabled:cursor-not-allowed text-white font-medium py-2.5 px-4 rounded-lg text-sm transition-colors"
-              >
-                {loading ? 'Sending…' : 'Send magic link'}
-              </button>
-            </form>
+                {mode === 'password' && (
+                  <div>
+                    <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-1.5">
+                      Password
+                    </label>
+                    <input
+                      id="password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      required
+                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                )}
+
+                {error && <p className="text-red-400 text-sm">{error}</p>}
+
+                <button
+                  type="submit"
+                  disabled={loading || !email || (mode === 'password' && !password)}
+                  className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/40 disabled:cursor-not-allowed text-white font-medium py-2.5 px-4 rounded-lg text-sm transition-colors"
+                >
+                  {loading ? 'Signing in…' : mode === 'password' ? 'Sign in' : 'Send magic link'}
+                </button>
+              </form>
+            </>
           )}
         </div>
 
