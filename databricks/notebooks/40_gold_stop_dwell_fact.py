@@ -84,6 +84,8 @@ schedule = (
         "stop_sequence",
         "scheduled_arrival_secs",
         "scheduled_departure_secs",
+        F.col("pickup_type").cast("int"),   # 0=regular, 1=no pickup (drop-off only)
+        F.col("drop_off_type").cast("int"), # 0=regular, 1=no drop-off (pickup only)
     )
 )
 
@@ -215,6 +217,8 @@ gold_dwell = joined.select(
     "actual_dwell_seconds",
     "scheduled_dwell_seconds",
     "dwell_delta_seconds",
+    "pickup_type",   # 0=regular, 1=no pickup (drop-off only) — used for OTP early reclassification
+    "drop_off_type", # 0=regular, 1=no drop-off (pickup only)
 )
 
 spark.sql(f"""
@@ -233,7 +237,9 @@ spark.sql(f"""
         departure_delay_seconds  INT,
         actual_dwell_seconds     INT,
         scheduled_dwell_seconds  INT,
-        dwell_delta_seconds      INT
+        dwell_delta_seconds      INT,
+        pickup_type              INT,
+        drop_off_type            INT
     )
     USING DELTA
     PARTITIONED BY (service_date)
@@ -249,7 +255,7 @@ spark.sql(f"""
     .format("delta")
     .mode("overwrite")
     .option("replaceWhere", f"service_date = '{target_date}'")
-    .option("overwriteSchema", "false")
+    .option("mergeSchema", "true")   # allows adding pickup_type/drop_off_type on first run
     .saveAsTable(GOLD_STOP_DWELL_FACT)
 )
 
