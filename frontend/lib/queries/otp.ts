@@ -3,18 +3,22 @@
 // Primary source: gold_stop_dwell_fact
 //   Columns: route_id, direction_id, trip_id, stop_id, stop_sequence,
 //            service_date, scheduled_arrival_ts, actual_arrival_ts,
-//            arrival_delay_seconds
+//            arrival_delay_seconds, pickup_type, drop_off_type
 //   Filter:  actual_arrival_ts IS NOT NULL (unobserved stops excluded)
 //
 // OTP window (Swiftly standard):
-//   Early   = arrival_delay_seconds < -60
+//   Early   = arrival_delay_seconds < -60  AND stop is a regular pickup stop
 //   On-Time = arrival_delay_seconds BETWEEN -60 AND 360
+//             OR stop is drop-off only (pickup_type=1) and arrived early
+//             (matches Swiftly "Include earlies as on time" for drop-off-only stops)
 //   Late    = arrival_delay_seconds > 360
 // ─────────────────────────────────────────────────────────────────────────────
 
-const EARLY   = 'arrival_delay_seconds < -60'
-const ON_TIME = 'arrival_delay_seconds BETWEEN -60 AND 360'
-const LATE    = 'arrival_delay_seconds > 360'
+// Drop-off-only stops (pickup_type=1): early arrivals reclassified as on-time.
+// Requires pickup_type column in gold_stop_dwell_fact (added 2026-03-19).
+const EARLY   = `arrival_delay_seconds < -60 AND COALESCE(pickup_type, 0) = 0`
+const ON_TIME = `(arrival_delay_seconds BETWEEN -60 AND 360 OR (arrival_delay_seconds < -60 AND COALESCE(pickup_type, 0) = 1))`
+const LATE    = `arrival_delay_seconds > 360`
 
 // When timepointOnly=true, restrict to stops flagged as timepoints in GTFS
 function timepointWhere(timepointOnly: boolean, alias = 'f'): string {
@@ -25,13 +29,16 @@ function timepointWhere(timepointOnly: boolean, alias = 'f'): string {
 }
 
 function otpCols(alias = 'f') {
-  const p = `${alias}.`
+  const a = alias
+  const early   = `${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.pickup_type, 0) = 0`
+  const onTime  = `(${a}.arrival_delay_seconds BETWEEN -60 AND 360 OR (${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.pickup_type, 0) = 1))`
+  const late    = `${a}.arrival_delay_seconds > 360`
   return `
-    ROUND(AVG(CASE WHEN ${p}${EARLY}   THEN 1.0 ELSE 0.0 END) * 100, 1) AS early_pct,
-    ROUND(AVG(CASE WHEN ${p}${ON_TIME} THEN 1.0 ELSE 0.0 END) * 100, 1) AS on_time_pct,
-    ROUND(AVG(CASE WHEN ${p}${LATE}    THEN 1.0 ELSE 0.0 END) * 100, 1) AS late_pct,
-    ROUND(AVG(${p}arrival_delay_seconds) / 60.0, 1)                       AS avg_delay_min,
-    ROUND(PERCENTILE_APPROX(${p}arrival_delay_seconds, 0.9) / 60.0, 1)   AS p90_delay_min`
+    ROUND(AVG(CASE WHEN ${early}  THEN 1.0 ELSE 0.0 END) * 100, 1) AS early_pct,
+    ROUND(AVG(CASE WHEN ${onTime} THEN 1.0 ELSE 0.0 END) * 100, 1) AS on_time_pct,
+    ROUND(AVG(CASE WHEN ${late}   THEN 1.0 ELSE 0.0 END) * 100, 1) AS late_pct,
+    ROUND(AVG(${a}.arrival_delay_seconds) / 60.0, 1)                 AS avg_delay_min,
+    ROUND(PERCENTILE_APPROX(${a}.arrival_delay_seconds, 0.9) / 60.0, 1) AS p90_delay_min`
 }
 
 // ── Static data ───────────────────────────────────────────────────────────────
