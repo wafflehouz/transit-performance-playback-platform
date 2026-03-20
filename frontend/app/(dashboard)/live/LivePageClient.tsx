@@ -82,7 +82,36 @@ export default function LivePageClient() {
 
   // Route stops (for map overlay) — may include point_type:'shape' | 'stop' tags
   const [routeStops, setRouteStops] = useState<Array<RouteStop & { point_type?: string }>>([])
+  const [headsigns, setHeadsigns] = useState<Map<number, string>>(new Map())
 
+  // Fetch headsigns for selected route
+  useEffect(() => {
+    if (!selectedRouteId) { setHeadsigns(new Map()); return }
+    fetch('/api/databricks/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sql: `
+          SELECT direction_id, trip_headsign AS headsign
+          FROM (
+            SELECT direction_id, trip_headsign, COUNT(*) AS cnt
+            FROM silver_dim_trip
+            WHERE route_id = :routeId AND trip_headsign IS NOT NULL
+            GROUP BY direction_id, trip_headsign
+          )
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY direction_id ORDER BY cnt DESC) = 1
+        `,
+        params: { routeId: selectedRouteId },
+      }),
+    })
+      .then((r) => r.json())
+      .then((d: { rows?: Array<{ direction_id: number; headsign: string }> }) => {
+        const map = new Map<number, string>()
+        for (const row of d.rows ?? []) map.set(row.direction_id, row.headsign)
+        setHeadsigns(map)
+      })
+      .catch(() => {})
+  }, [selectedRouteId])
 
   // Fetch stops + shape points for selected route.
   // Two separate queries so stops always render even if silver_fact_shape_points doesn't exist yet.
@@ -319,6 +348,7 @@ export default function LivePageClient() {
     routeTypes.get(selectedRouteId) ?? 3,
     routes.find(r => r.route_id === selectedRouteId)?.route_short_name
   ) : null}
+  headsigns={headsigns}
 />
     </div>
   )
