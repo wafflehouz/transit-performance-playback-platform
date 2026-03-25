@@ -417,6 +417,19 @@ export default function PlaybackPageClient() {
 
   const selectedTrip = tripList.find((t) => t.trip_id === selectedTripId)
 
+  // Next trip on the same route+direction, by observed first GPS point
+  const nextTrip = useMemo(() => {
+    if (!selectedTrip) return null
+    const currentEndMs = new Date(selectedTrip.last_ts).getTime()
+    return tripList
+      .filter((t) =>
+        t.trip_id !== selectedTrip.trip_id &&
+        t.direction_id === selectedTrip.direction_id &&
+        new Date(t.first_ts).getTime() > currentEndMs
+      )
+      .sort((a, b) => new Date(a.first_ts).getTime() - new Date(b.first_ts).getTime())[0] ?? null
+  }, [selectedTrip, tripList])
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full">
@@ -526,7 +539,7 @@ export default function PlaybackPageClient() {
                   : 'Stops'}
               </p>
             </div>
-            <div className="overflow-y-auto flex-1">
+            <div className="overflow-y-auto flex-1 min-h-0">
               {stopRows.map((s, i) => {
                 const isCurrent = i === currentStopIdx
                 const isPast    = s.actual_arrival_ts_ms !== null && s.actual_arrival_ts_ms <= playbackMs
@@ -583,6 +596,26 @@ export default function PlaybackPageClient() {
                 )
               })}
             </div>
+
+            {/* Next trip footer */}
+            {nextTrip && selectedTrip && (() => {
+              const gapMs  = new Date(nextTrip.first_ts).getTime() - new Date(selectedTrip.last_ts).getTime()
+              const gapMin = Math.round(gapMs / 60000)
+              return (
+                <div className="border-t border-gray-800 px-3 py-2.5 shrink-0">
+                  <p className="text-xs text-gray-500 mb-0.5">Next trip on this route</p>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xs text-gray-300 font-medium">
+                      {fmtPhoenix(new Date(nextTrip.first_ts).getTime(), false)}
+                      {nextTrip.trip_headsign ? ` · To ${nextTrip.trip_headsign}` : ''}
+                    </span>
+                    <span className="text-xs text-gray-500 shrink-0 ml-2">
+                      in {gapMin} min
+                    </span>
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         )}
       </div>
