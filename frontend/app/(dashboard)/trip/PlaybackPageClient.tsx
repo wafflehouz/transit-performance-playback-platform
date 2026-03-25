@@ -38,13 +38,13 @@ function fmtTimestamp(ts: string | null): string {
   return fmtPhoenix(new Date(ts).getTime(), false)
 }
 
-function fmtDelay(s: number | null, pickupType: number): string {
+function fmtDelay(s: number | null, _pickupType: number): string {
   if (s === null) return '—'
-  // Early at drop-off-only = on time
-  if (s < -60 && pickupType === 0) return `-${Math.floor(Math.abs(s) / 60)}:${String(Math.abs(s) % 60).padStart(2, '0')}`
-  if (s <= 360) return 'On time'
-  const m = Math.floor(s / 60), sec = s % 60
-  return `+${m}:${String(sec).padStart(2, '0')}`
+  const abs = Math.abs(s)
+  const m = Math.floor(abs / 60)
+  const sec = abs % 60
+  const mmss = `${m}:${String(sec).padStart(2, '0')}`
+  return s < 0 ? `-${mmss}` : `+${mmss}`
 }
 
 function delayColor(s: number | null, pickupType: number): string {
