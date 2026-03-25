@@ -15,14 +15,17 @@ export function playbackTripListSql(routeId: string) {
       p.trip_id,
       t.direction_id,
       t.trip_headsign,
-      MIN(p.point_ts)  AS first_ts,
-      MAX(p.point_ts)  AS last_ts,
-      COUNT(*)         AS point_count
+      MIN(p.point_ts)           AS first_ts,
+      MAX(p.point_ts)           AS last_ts,
+      COUNT(*)                  AS point_count,
+      MIN(f.scheduled_arrival_ts) AS first_stop_scheduled_ts
     FROM gold_trip_path_fact p
     INNER JOIN silver_dim_trip t ON p.trip_id = t.trip_id AND t.route_id = '${id}'
+    LEFT JOIN gold_stop_dwell_fact f
+      ON f.trip_id = p.trip_id AND f.service_date = p.service_date
     WHERE p.service_date = :serviceDate
     GROUP BY p.trip_id, t.direction_id, t.trip_headsign
-    ORDER BY first_ts
+    ORDER BY first_stop_scheduled_ts, first_ts
   `
 }
 

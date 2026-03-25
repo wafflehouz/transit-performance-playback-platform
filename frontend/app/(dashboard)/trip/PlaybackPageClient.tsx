@@ -84,6 +84,7 @@ interface TripListRow {
   first_ts: string
   last_ts: string
   point_count: number
+  first_stop_scheduled_ts: string | null
 }
 
 interface StopRow extends PlaybackStop {
@@ -376,10 +377,10 @@ export default function PlaybackPageClient() {
   }
 
   function tripLabel(t: TripListRow): string {
-    const time = fmtPhoenix(new Date(t.first_ts).getTime(), false)
-    const dir  = dirLabel(t.direction_id)
+    const ts   = t.first_stop_scheduled_ts ?? t.first_ts
+    const time = fmtPhoenix(new Date(ts).getTime(), false)
     const head = t.trip_headsign ? `To ${t.trip_headsign}` : ''
-    return [time, dir, head].filter(Boolean).join(' · ')
+    return [time, head].filter(Boolean).join(' · ')
   }
 
   // ── Play/pause ─────────────────────────────────────────────────────────────
