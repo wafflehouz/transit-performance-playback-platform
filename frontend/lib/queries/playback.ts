@@ -29,6 +29,20 @@ export function playbackTripListSql(routeId: string) {
   `
 }
 
+// Vehicle(s) that operated a trip — ordered by number of VP pings (most = primary)
+export function playbackVehiclesSql(tripId: string) {
+  const id = tripId.replace(/'/g, "''")
+  return `
+    SELECT vehicle_id, COUNT(*) AS ping_count
+    FROM silver_fact_vehicle_positions
+    WHERE service_date = :serviceDate
+      AND trip_id = '${id}'
+      AND vehicle_id IS NOT NULL
+    GROUP BY vehicle_id
+    ORDER BY ping_count DESC
+  `
+}
+
 // All VP path points for a specific trip on a service date (ordered by sequence)
 export function playbackPathSql(tripId: string) {
   const id = tripId.replace(/'/g, "''")

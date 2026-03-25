@@ -8,7 +8,7 @@ import RouteFilterPanel, {
   type DatePreset,
 } from '@/components/filters/RouteFilterPanel'
 import PlaybackMap, { type PlaybackPoint, type PlaybackStop } from '@/components/map/PlaybackMap'
-import { playbackTripListSql, playbackPathSql, playbackStopsSql, trafficCongestionSql } from '@/lib/queries/playback'
+import { playbackTripListSql, playbackPathSql, playbackStopsSql, playbackVehiclesSql, trafficCongestionSql } from '@/lib/queries/playback'
 import { ROUTES_WITH_DATA_SQL } from '@/lib/queries/otp'
 import type { DimRoute, CongestionHex } from '@/types'
 import { cn } from '@/lib/utils'
@@ -130,6 +130,7 @@ export default function PlaybackPageClient() {
   const [pathPoints, setPathPoints] = useState<PlaybackPoint[]>([])
   const [stopRows, setStopRows] = useState<StopRow[]>([])
 
+  const [vehicles,           setVehicles]           = useState<{ vehicle_id: string; ping_count: number }[]>([])
   const [loadingTrips,       setLoadingTrips]       = useState(false)
   const [loadingTrip,        setLoadingTrip]        = useState(false)
   const [error,              setError]              = useState<string | null>(null)
@@ -203,6 +204,7 @@ export default function PlaybackPageClient() {
     setLoadingTrip(true)
     setPathPoints([])
     setStopRows([])
+    setVehicles([])
     setIsPlaying(false)
     setError(null)
 
@@ -210,8 +212,10 @@ export default function PlaybackPageClient() {
     Promise.all([
       fetchJson(playbackPathSql(selectedTripId), params),
       fetchJson(playbackStopsSql(selectedTripId), params),
+      fetchJson(playbackVehiclesSql(selectedTripId), params),
     ])
-      .then(([pathRows, sRows]) => {
+      .then(([pathRows, sRows, vRows]) => {
+        setVehicles(vRows.map((r: any) => ({ vehicle_id: String(r.vehicle_id), ping_count: Number(r.ping_count) })))
         const pts: PlaybackPoint[] = pathRows.map((r: any) => ({
           tsMs: new Date(r.point_ts).getTime(),
           lat: Number(r.lat),
@@ -526,6 +530,20 @@ export default function PlaybackPageClient() {
                   ? `${dirLabel(selectedTrip.direction_id) || 'Trip'} — ${selectedTrip.trip_headsign ?? ''}`
                   : 'Stops'}
               </p>
+              {vehicles.length > 0 && (
+                <p
+                  className="text-xs text-gray-600 mt-0.5"
+                  title={vehicles.length > 1 ? `Vehicle handoff detected — ${vehicles.map((v) => `#${v.vehicle_id} (${v.ping_count} pings)`).join(', ')}` : undefined}
+                >
+                  {vehicles.length > 1 ? (
+                    <span className="text-amber-600">
+                      Vehicles {vehicles.map((v) => `#${v.vehicle_id}`).join(' → ')}
+                    </span>
+                  ) : (
+                    `Vehicle #${vehicles[0].vehicle_id}`
+                  )}
+                </p>
+              )}
             </div>
             <div className="overflow-y-auto flex-1 min-h-0">
               {stopRows.map((s, i) => {
