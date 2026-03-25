@@ -91,6 +91,7 @@ interface StopRow extends PlaybackStop {
   scheduled_arrival_ts: string | null
   actual_arrival_ts: string | null
   actual_arrival_ts_ms: number | null  // pre-parsed for scrubber sync
+  dwell_seconds: number | null
 }
 
 const SPEEDS = [8, 16, 32, 64] as const
@@ -229,6 +230,7 @@ export default function PlaybackPageClient() {
           actual_arrival_ts_ms: r.actual_arrival_ts ? new Date(r.actual_arrival_ts).getTime() : null,
           arrival_delay_seconds: r.arrival_delay_seconds != null ? Number(r.arrival_delay_seconds) : null,
           pickup_type: Number(r.pickup_type ?? 0),
+          dwell_seconds: r.dwell_seconds != null ? Number(r.dwell_seconds) : null,
         }))
 
         setPathPoints(pts)
@@ -567,6 +569,13 @@ export default function PlaybackPageClient() {
                               {fmtDelay(s.arrival_delay_seconds, s.pickup_type)}
                             </span>
                           </>
+                        )}
+                        {s.dwell_seconds != null && s.dwell_seconds > 0 && (
+                          <span className="text-xs text-gray-600" title="Inferred dwell time">
+                            {s.dwell_seconds >= 60
+                              ? `${Math.floor(s.dwell_seconds / 60)}m${s.dwell_seconds % 60 > 0 ? `${s.dwell_seconds % 60}s` : ''} dwell`
+                              : `${s.dwell_seconds}s dwell`}
+                          </span>
                         )}
                       </div>
                     </div>

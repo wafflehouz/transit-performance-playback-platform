@@ -74,9 +74,14 @@ export function playbackStopsSql(tripId: string) {
       f.scheduled_arrival_ts,
       f.actual_arrival_ts,
       f.arrival_delay_seconds,
-      COALESCE(f.pickup_type, 0)         AS pickup_type
+      COALESCE(f.pickup_type, 0)         AS pickup_type,
+      d.dwell_seconds
     FROM gold_stop_dwell_fact f
     LEFT JOIN silver_dim_stop s ON f.stop_id = s.stop_id
+    LEFT JOIN gold_stop_dwell_inferred d
+      ON d.service_date = f.service_date
+     AND d.trip_id = f.trip_id
+     AND d.stop_sequence = f.stop_sequence
     WHERE f.service_date = :serviceDate
       AND f.trip_id = '${id}'
     ORDER BY f.stop_sequence
