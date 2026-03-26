@@ -622,8 +622,27 @@ function TripMatrix({
   stopSeqs.sort((a, b) => a[0] - b[0])
   const stops = stopSeqs  // all stops, no cap
 
-  // All unique trips, sorted
-  const trips = [...new Set(dirData.map((r) => r.trip_id as string))].sort()
+  // Map trip_id → first scheduled time (Phoenix HH:MM AM/PM)
+  const tripFirstTs = new Map<string, string>()
+  for (const r of dirData) {
+    if (!tripFirstTs.has(r.trip_id) && r.first_scheduled_ts) {
+      const d = new Date(r.first_scheduled_ts)
+      const phoenixMs = d.getTime() - 7 * 3600 * 1000
+      const pd = new Date(phoenixMs)
+      const h = pd.getUTCHours()
+      const m = String(pd.getUTCMinutes()).padStart(2, '0')
+      const ampm = h >= 12 ? 'PM' : 'AM'
+      tripFirstTs.set(r.trip_id, `${h % 12 || 12}:${m} ${ampm}`)
+    }
+  }
+
+  // All unique trips sorted by first scheduled time, fallback to trip_id
+  const trips = [...new Set(dirData.map((r) => r.trip_id as string))]
+    .sort((a, b) => {
+      const ta = dirData.find((r) => r.trip_id === a)?.first_scheduled_ts ?? ''
+      const tb = dirData.find((r) => r.trip_id === b)?.first_scheduled_ts ?? ''
+      return ta.localeCompare(tb) || a.localeCompare(b)
+    })
 
   // Lookup
   const lookup = new Map<string, number>()
@@ -697,13 +716,16 @@ function TripMatrix({
             {trips.map((tripId) => (
               <div key={tripId} style={{ display: 'flex', alignItems: 'center', height: CELL_H }}>
                 {/* Trip label */}
-                <div style={{
-                  width: LABEL_W, flexShrink: 0,
-                  fontSize: 10, color: '#9ca3af',
-                  textAlign: 'right', paddingRight: 8,
-                  overflow: 'hidden', whiteSpace: 'nowrap',
-                }}>
-                  {tripId.slice(-10)}
+                <div
+                  title={tripId}
+                  style={{
+                    width: LABEL_W, flexShrink: 0,
+                    fontSize: 10, color: '#9ca3af',
+                    textAlign: 'right', paddingRight: 8,
+                    overflow: 'hidden', whiteSpace: 'nowrap',
+                  }}
+                >
+                  {tripFirstTs.get(tripId) ?? tripId.slice(-10)}
                 </div>
                 {/* Cells */}
                 {stops.map(([seq, stopName]) => {

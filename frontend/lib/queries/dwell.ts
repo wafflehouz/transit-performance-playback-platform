@@ -328,6 +328,13 @@ export function tripMatrixSql(
     WHERE route_id = '${id}'
     GROUP BY direction_id, trip_headsign
   )`)
+  ctes.push(`first_stop AS (
+    SELECT trip_id, MIN(scheduled_arrival_ts) AS first_scheduled_ts
+    FROM gold_stop_dwell_fact
+    WHERE service_date >= :startDate AND service_date <= :endDate
+      AND route_id = '${id}'
+    GROUP BY trip_id
+  )`)
 
   return `
     WITH ${ctes.join(',\n')}
@@ -339,11 +346,13 @@ export function tripMatrixSql(
       i.stop_id,
       COALESCE(s.stop_name, i.stop_id)                                   AS stop_name,
       ROUND(AVG(i.dwell_seconds), 0)                                     AS avg_dwell_sec,
-      COUNT(DISTINCT i.service_date)                                     AS days_observed
+      COUNT(DISTINCT i.service_date)                                     AS days_observed,
+      MAX(fs.first_scheduled_ts)                                         AS first_scheduled_ts
     FROM gold_stop_dwell_inferred i
     ${excludeTerminals ? 'INNER JOIN trip_bounds tb ON i.trip_id = tb.trip_id' : ''}
     LEFT JOIN silver_dim_stop s ON i.stop_id = s.stop_id
     LEFT JOIN headsign h ON i.direction_id = h.direction_id AND h.rn = 1
+    LEFT JOIN first_stop fs ON i.trip_id = fs.trip_id
     WHERE i.service_date >= :startDate AND i.service_date <= :endDate
       AND i.route_id = '${id}'
     ${dirFilter}
@@ -352,7 +361,7 @@ export function tripMatrixSql(
       COALESCE(h.trip_headsign, CONCAT('Dir ', CAST(i.direction_id AS STRING))),
       i.stop_sequence, i.stop_id, COALESCE(s.stop_name, i.stop_id)
     HAVING days_observed >= 1
-    ORDER BY i.direction_id, i.trip_id, i.stop_sequence
+    ORDER BY i.direction_id, MAX(fs.first_scheduled_ts), i.trip_id, i.stop_sequence
   `
 }
 
