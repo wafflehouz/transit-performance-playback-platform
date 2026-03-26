@@ -102,6 +102,7 @@ GOLD_INCIDENT_REPORTS         = tbl("gold_incident_reports")
 GOLD_STOP_DWELL_INFERRED      = tbl("gold_stop_dwell_inferred")
 GOLD_GTFS_VERSION_LOG         = tbl("gold_gtfs_version_log")
 GOLD_ROUTE_GROUPS             = tbl("gold_route_groups")
+GOLD_FEED_HEALTH_LOG          = tbl("gold_feed_health_log")
 
 # ── Pipeline Constants ────────────────────────────────────────────────────────
 BRONZE_RETENTION_DAYS = 90     # 90 days: covers 28-day baseline window with margin for gold rebuilds

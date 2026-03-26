@@ -398,22 +398,104 @@ if coverage_status == "BELOW_THRESHOLD":
         f"({coverage_pct:.0f}%, threshold {alert_ratio_threshold*100:.0f}%)"
     )
 
-if problems:
+is_healthy  = len(problems) == 0
+status_str  = "HEALTHY" if is_healthy else "UNHEALTHY"
+
+if is_healthy:
+    summary_msg = (
+        f"HEALTHY — feed active, {live_vehicle_count}/{expected_trips_now} vehicles "
+        f"reporting ({coverage_pct:.0f}%) | {run_ts_str}"
+    )
+else:
     summary_msg = (
         f"FEED UNHEALTHY — "
         + "; ".join(problems)
         + f" | as of {run_ts_str}"
     )
-    print(f"  UNHEALTHY — {'; '.join(problems)}")
-    print()
+
+print(f"  {status_str} — {'; '.join(problems) if problems else 'all checks passed'}")
+print()
+
+# COMMAND ----------
+
+# MAGIC %md ## Step 7 — Write to gold_feed_health_log
+
+# COMMAND ----------
+
+# Append one row per run so every hourly check is permanently queryable.
+# This allows downstream use: exclude degraded windows from Gold 45 baseline,
+# and surface outage history in the frontend.
+
+from pyspark.sql import Row
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, BooleanType, TimestampType
+
+log_schema = StructType([
+    StructField("logged_at",          TimestampType(), False),   # UTC timestamp of this run
+    StructField("phoenix_date",       StringType(),    False),   # YYYY-MM-DD (Phoenix local)
+    StructField("phoenix_hour",       IntegerType(),   False),   # 0-23 (Phoenix local)
+    StructField("status",             StringType(),    False),   # HEALTHY | UNHEALTHY
+    StructField("live_vehicles",      IntegerType(),   True),
+    StructField("expected_trips",     IntegerType(),   True),
+    StructField("coverage_ratio",     DoubleType(),    True),
+    StructField("freshness_status",   StringType(),    True),    # OK | STALE
+    StructField("coverage_status",    StringType(),    True),    # OK | BELOW_THRESHOLD
+    StructField("used_fallback",      BooleanType(),   True),    # True = historical estimate used
+    StructField("problems",           StringType(),    True),    # semicolon-joined problem strings
+    StructField("summary_msg",        StringType(),    True),
+])
+
+log_row = Row(
+    logged_at        = datetime.now(tz=timezone.utc).replace(tzinfo=None),
+    phoenix_date     = now_phoenix.strftime("%Y-%m-%d"),
+    phoenix_hour     = now_phoenix.hour,
+    status           = status_str,
+    live_vehicles    = int(live_vehicle_count),
+    expected_trips   = int(expected_trips_now) if expected_trips_now is not None else None,
+    coverage_ratio   = float(coverage_ratio),
+    freshness_status = freshness_status,
+    coverage_status  = coverage_status,
+    used_fallback    = bool(used_fallback),
+    problems         = "; ".join(problems) if problems else None,
+    summary_msg      = summary_msg,
+)
+
+log_df = spark.createDataFrame([log_row], schema=log_schema)
+
+spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {GOLD_FEED_HEALTH_LOG} (
+        logged_at          TIMESTAMP,
+        phoenix_date       STRING,
+        phoenix_hour       INT,
+        status             STRING,
+        live_vehicles      INT,
+        expected_trips     INT,
+        coverage_ratio     DOUBLE,
+        freshness_status   STRING,
+        coverage_status    STRING,
+        used_fallback      BOOLEAN,
+        problems           STRING,
+        summary_msg        STRING
+    )
+    USING DELTA
+    TBLPROPERTIES (
+        'delta.autoOptimize.optimizeWrite' = 'true',
+        'delta.autoOptimize.autoCompact'   = 'true'
+    )
+""")
+
+log_df.write.format("delta").mode("append").saveAsTable(GOLD_FEED_HEALTH_LOG)
+
+print(f"✓ Logged to {GOLD_FEED_HEALTH_LOG}: {status_str} at {run_ts_str}")
+
+# COMMAND ----------
+
+# MAGIC %md ## Step 8 — Pass / Fail
+
+# COMMAND ----------
+
+if not is_healthy:
     print(f"[FAIL] {summary_msg}")
     raise RuntimeError(summary_msg)
 else:
-    summary_msg = (
-        f"HEALTHY — feed active, {live_vehicle_count}/{expected_trips_now} vehicles "
-        f"reporting ({coverage_pct:.0f}%) | {run_ts_str}"
-    )
-    print(f"  {summary_msg}")
-    print()
     print(f"[OK] {summary_msg}")
     dbutils.notebook.exit(summary_msg)
