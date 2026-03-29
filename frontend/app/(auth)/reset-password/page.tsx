@@ -1,9 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Suspense } from 'react'
 
 function ResetPasswordForm() {
   const [password, setPassword] = useState('')
@@ -15,24 +13,13 @@ function ResetPasswordForm() {
   const [expired, setExpired] = useState(false)
 
   const supabase = createClient()
-  const searchParams = useSearchParams()
 
   useEffect(() => {
-    const code = searchParams.get('code')
-
-    if (code) {
-      // PKCE flow: exchange the code for a session
-      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
-        if (error) setExpired(true)
-        else setReady(true)
-      })
-    } else {
-      // Implicit flow fallback: check for existing session from hash
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session) setReady(true)
-        else setExpired(true)
-      })
-    }
+    // The auth callback has already exchanged the code — just check for session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) setReady(true)
+      else setExpired(true)
+    })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleReset(e: React.FormEvent) {
@@ -138,13 +125,7 @@ export default function ResetPasswordPage() {
           </div>
           <span className="text-white font-semibold text-lg tracking-tight">Phoenix Transit Analytics</span>
         </div>
-        <Suspense fallback={
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 text-center">
-            <p className="text-gray-400 text-sm animate-pulse">Loading…</p>
-          </div>
-        }>
-          <ResetPasswordForm />
-        </Suspense>
+        <ResetPasswordForm />
       </div>
     </div>
   )
