@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
 
 type Mode = 'signin' | 'register'
@@ -58,38 +59,51 @@ export default function LoginPage() {
     setLoading(false)
   }
 
-  if (registered) {
-    return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
-        <div className="w-full max-w-sm">
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 text-center">
-            <div className="w-12 h-12 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto mb-3">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-6 h-6 text-emerald-400">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+  return (
+    <div className="min-h-screen flex">
+      {/* Left — hero image */}
+      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden">
+        <Image
+          src="/downtown_phoenix_rail.png"
+          alt="Valley Metro light rail in downtown Phoenix"
+          fill
+          className="object-cover"
+          priority
+        />
+        {/* Dark gradient overlay */}
+        <div className="absolute inset-0 bg-gradient-to-br from-gray-950/80 via-gray-950/60 to-blue-950/70" />
+
+        {/* Branding over image */}
+        <div className="relative z-10 flex flex-col justify-between p-10 w-full">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-blue-500 flex items-center justify-center shrink-0">
+              <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.5} className="w-5 h-5">
+                <path d="M3 12h18M3 6l9-3 9 3M3 18l9 3 9-3" />
               </svg>
             </div>
-            <p className="text-white font-medium mb-1">Account created</p>
-            <p className="text-gray-400 text-sm mb-4">
-              Check your email to confirm your address, then sign in.
-            </p>
-            <button
-              onClick={() => { setRegistered(false); switchMode('signin') }}
-              className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
-            >
-              Back to sign in
-            </button>
+            <span className="text-white font-semibold text-lg tracking-tight">Transit Platform</span>
           </div>
+
+          <div>
+            <h1 className="text-3xl font-bold text-white mb-3 leading-snug">
+              Valley Metro<br />Performance Intelligence
+            </h1>
+            <p className="text-gray-300 text-sm leading-relaxed max-w-xs">
+              Real-time OTP, dwell analysis, trip playback, and AI-generated weekly briefs — built for transit planners.
+            </p>
+          </div>
+
+          <p className="text-gray-500 text-xs">
+            Phoenix, Arizona · Valley Metro Rail &amp; Bus
+          </p>
         </div>
       </div>
-    )
-  }
 
-  return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        {/* Logo */}
-        <div className="mb-8 text-center">
-          <div className="inline-flex items-center gap-2 mb-3">
+      {/* Right — form */}
+      <div className="flex-1 bg-gray-950 flex items-center justify-center px-6 py-12">
+        <div className="w-full max-w-sm">
+          {/* Mobile logo (hidden on lg) */}
+          <div className="flex items-center gap-2.5 mb-8 lg:hidden">
             <div className="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center">
               <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.5} className="w-5 h-5">
                 <path d="M3 12h18M3 6l9-3 9 3M3 18l9 3 9-3" />
@@ -97,109 +111,133 @@ export default function LoginPage() {
             </div>
             <span className="text-white font-semibold text-lg tracking-tight">Transit Platform</span>
           </div>
-          <p className="text-gray-400 text-sm">Planner performance intelligence</p>
-        </div>
 
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-          {/* Mode toggle */}
-          <div className="flex rounded-lg bg-gray-800 p-0.5 mb-5">
-            <button
-              onClick={() => switchMode('signin')}
-              className={`flex-1 text-sm py-1.5 rounded-md font-medium transition-colors ${
-                mode === 'signin' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
-              }`}
-            >
-              Sign in
-            </button>
-            <button
-              onClick={() => switchMode('register')}
-              className={`flex-1 text-sm py-1.5 rounded-md font-medium transition-colors ${
-                mode === 'register' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
-              }`}
-            >
-              Register
-            </button>
-          </div>
-
-          <form onSubmit={mode === 'signin' ? handleSignIn : handleRegister} className="space-y-4">
-            {mode === 'register' && (
-              <div>
-                <label htmlFor="displayName" className="block text-sm font-medium text-gray-300 mb-1.5">
-                  Display name
-                </label>
-                <input
-                  id="displayName"
-                  type="text"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Your name"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+          {registered ? (
+            <div className="text-center py-6">
+              <div className="w-12 h-12 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto mb-3">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-6 h-6 text-emerald-400">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
               </div>
-            )}
-
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-1.5">
-                Email
-              </label>
-              <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@valleymetro.org"
-                required
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
+              <p className="text-white font-semibold text-lg mb-1">Account created</p>
+              <p className="text-gray-400 text-sm mb-5">
+                Check your email to confirm your address, then sign in.
+              </p>
+              <button
+                onClick={() => { setRegistered(false); switchMode('signin') }}
+                className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
+              >
+                Back to sign in
+              </button>
             </div>
-
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-1.5">
-                Password
-              </label>
-              <input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-
-            {mode === 'register' && (
-              <div>
-                <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-300 mb-1.5">
-                  Confirm password
-                </label>
-                <input
-                  id="confirmPassword"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="••••••••"
-                  required
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+          ) : (
+            <>
+              <div className="mb-7">
+                <h2 className="text-2xl font-bold text-white mb-1">
+                  {mode === 'signin' ? 'Welcome back' : 'Create account'}
+                </h2>
+                <p className="text-gray-400 text-sm">
+                  {mode === 'signin'
+                    ? 'Sign in to your account to continue.'
+                    : 'Register to access the platform.'}
+                </p>
               </div>
-            )}
 
-            {error && <p className="text-red-400 text-sm">{error}</p>}
+              {/* Mode toggle */}
+              <div className="flex rounded-lg bg-gray-800 p-0.5 mb-6">
+                <button
+                  onClick={() => switchMode('signin')}
+                  className={`flex-1 text-sm py-1.5 rounded-md font-medium transition-colors ${
+                    mode === 'signin' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  Sign in
+                </button>
+                <button
+                  onClick={() => switchMode('register')}
+                  className={`flex-1 text-sm py-1.5 rounded-md font-medium transition-colors ${
+                    mode === 'register' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  Register
+                </button>
+              </div>
 
-            <button
-              type="submit"
-              disabled={loading || !email || !password || (mode === 'register' && !confirmPassword)}
-              className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/40 disabled:cursor-not-allowed text-white font-medium py-2.5 px-4 rounded-lg text-sm transition-colors"
-            >
-              {loading ? (mode === 'signin' ? 'Signing in…' : 'Creating account…') : (mode === 'signin' ? 'Sign in' : 'Create account')}
-            </button>
-          </form>
+              <form onSubmit={mode === 'signin' ? handleSignIn : handleRegister} className="space-y-4">
+                {mode === 'register' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1.5">Display name</label>
+                    <input
+                      type="text"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      placeholder="Your name"
+                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1.5">Email</label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@valleymetro.org"
+                    required
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+
+                {mode === 'register' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1.5">Confirm password</label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="••••••••"
+                      required
+                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                )}
+
+                {error && (
+                  <div className="px-3 py-2.5 bg-red-900/20 border border-red-800 rounded-lg text-red-400 text-sm">
+                    {error}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading || !email || !password || (mode === 'register' && !confirmPassword)}
+                  className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/40 disabled:cursor-not-allowed text-white font-medium py-2.5 px-4 rounded-lg text-sm transition-colors mt-2"
+                >
+                  {loading
+                    ? (mode === 'signin' ? 'Signing in…' : 'Creating account…')
+                    : (mode === 'signin' ? 'Sign in' : 'Create account')}
+                </button>
+              </form>
+            </>
+          )}
+
+          <p className="text-center text-gray-600 text-xs mt-8">
+            Transit Performance Platform · Phoenix, AZ
+          </p>
         </div>
-
-        <p className="text-center text-gray-600 text-xs mt-6">
-          Transit Performance Platform
-        </p>
       </div>
     </div>
   )
