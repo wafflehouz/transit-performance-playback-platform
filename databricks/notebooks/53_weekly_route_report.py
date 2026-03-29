@@ -156,6 +156,7 @@ def get_route_data(route_id: str) -> dict:
         WHERE f.route_id = '{sid}'
           AND f.service_date >= '{sd}' AND f.service_date <= '{ed}'
           AND f.actual_arrival_ts IS NOT NULL
+        GROUP BY r.route_short_name, r.route_long_name
     """).collect()
 
     # ── Daily OTP trend ──────────────────────────────────────────────────────
