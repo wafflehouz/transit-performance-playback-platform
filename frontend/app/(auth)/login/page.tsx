@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
 
 type Mode = 'signin' | 'register'
@@ -62,14 +61,14 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex">
       {/* Left — hero image */}
-      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden">
-        <Image
-          src="/downtown_phoenix_rail.png"
-          alt="Valley Metro light rail in downtown Phoenix"
-          fill
-          className="object-cover"
-          priority
-        />
+      <div
+        className="hidden lg:flex lg:w-1/2 relative overflow-hidden"
+        style={{
+          backgroundImage: 'url(/downtown_phoenix_rail.png)',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+        }}
+      >
         {/* Dark gradient overlay */}
         <div className="absolute inset-0 bg-gradient-to-br from-gray-950/80 via-gray-950/60 to-blue-950/70" />
 
