@@ -1,8 +1,15 @@
-export default function SubscriptionsPage() {
+import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+import SubscriptionsClient from './SubscriptionsClient'
+
+export default async function SubscriptionsPage() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-semibold text-white mb-1">Subscriptions</h1>
-      <p className="text-gray-400 text-sm">Weekly AI brief subscriptions by route or group — coming soon</p>
+    <div className="p-6 overflow-auto h-full">
+      <SubscriptionsClient user={user} />
     </div>
   )
 }
