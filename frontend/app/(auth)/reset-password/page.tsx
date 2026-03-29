@@ -15,8 +15,29 @@ function ResetPasswordForm() {
   const supabase = createClient()
 
   useEffect(() => {
-    // Implicit flow: Supabase puts tokens in the URL hash
-    // onAuthStateChange fires PASSWORD_RECOVERY when it detects the hash
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('code')
+    const tokenHash = params.get('token_hash')
+
+    // PKCE flow: exchange code for session
+    if (code) {
+      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+        if (error) setExpired(true)
+        else setReady(true)
+      })
+      return
+    }
+
+    // Token hash flow (newer Supabase OTP)
+    if (tokenHash) {
+      supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' }).then(({ error }) => {
+        if (error) setExpired(true)
+        else setReady(true)
+      })
+      return
+    }
+
+    // Implicit flow: onAuthStateChange fires PASSWORD_RECOVERY from hash
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY') setReady(true)
     })
