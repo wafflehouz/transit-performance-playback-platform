@@ -432,11 +432,11 @@ for sub in subscriptions:
     to_email = email_map.get(user_id)
 
     if not to_email:
-        print(f"  SKIP {route_name}: no email resolved for user {user_id}")
+        print(f"  SKIP {route_id}: no email resolved for user {user_id}")
         results.append({"user_id": user_id, "route_id": route_id, "status": "NO_EMAIL"})
         continue
 
-    print(f"\n→ {route_name} → {to_email}")
+    print(f"\n→ {route_id} → {to_email}")
 
     try:
         print(f"  Querying gold tables…")
