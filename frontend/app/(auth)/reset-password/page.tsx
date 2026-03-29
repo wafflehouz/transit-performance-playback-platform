@@ -15,20 +15,12 @@ function ResetPasswordForm() {
   const supabase = createClient()
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const tokenHash = params.get('token_hash')
-    const type = params.get('type')
-
-    if (tokenHash && type === 'recovery') {
-      supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' }).then(({ error }) => {
-        if (error) setExpired(true)
-        else setReady(true)
-      })
-      return
-    }
-
-    // Fallback: PKCE auto-exchange via onAuthStateChange (covers ?code= in URL)
+    // Subscribing to onAuthStateChange triggers the Supabase client to initialize.
+    // In PKCE flow, it auto-detects ?code= in the URL and calls exchangeCodeForSession
+    // using the code_verifier stored in cookies from when resetPasswordForEmail was called.
+    // On success it fires PASSWORD_RECOVERY.
     let isReady = false
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY') {
         isReady = true
@@ -36,6 +28,7 @@ function ResetPasswordForm() {
       }
     })
 
+    // Handle page refresh where session already exists
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) { isReady = true; setReady(true) }
     })
