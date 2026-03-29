@@ -1,16 +1,11 @@
 import { redirect } from 'next/navigation'
 
-export default function RootPage({
+export default async function RootPage({
   searchParams,
 }: {
-  searchParams: { code?: string; type?: string }
+  searchParams: Promise<{ code?: string }>
 }) {
-  // Supabase password recovery links redirect to the site root with ?code=
-  if (searchParams.code && searchParams.type === 'recovery') {
-    redirect(`/reset-password?code=${searchParams.code}`)
-  }
-  if (searchParams.code) {
-    redirect(`/reset-password?code=${searchParams.code}`)
-  }
+  const { code } = await searchParams
+  if (code) redirect(`/reset-password?code=${code}`)
   redirect('/dashboard')
 }
