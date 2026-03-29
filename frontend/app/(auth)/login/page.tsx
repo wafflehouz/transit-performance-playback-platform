@@ -80,15 +80,15 @@ export default function LoginPage() {
                 <path d="M3 12h18M3 6l9-3 9 3M3 18l9 3 9-3" />
               </svg>
             </div>
-            <span className="text-white font-semibold text-lg tracking-tight">Phoenix Transit Analytics</span>
+            <span className="text-white font-semibold text-lg tracking-tight">Transit Analytics</span>
           </div>
 
           <div>
             <h1 className="text-3xl font-bold text-white mb-3 leading-snug">
-              Real-Time Performance<br />Intelligence
+              Real-Time Performance<br />Insights
             </h1>
             <p className="text-gray-300 text-sm leading-relaxed max-w-xs">
-              Real-time OTP, dwell analysis, trip playback, and AI-generated weekly briefs — built for transit planners.
+              OTP, dwell analysis, trip playback, and AI-generated weekly briefs — built for transit planners.
             </p>
           </div>
 
