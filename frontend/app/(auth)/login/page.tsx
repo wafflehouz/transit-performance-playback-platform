@@ -80,12 +80,12 @@ export default function LoginPage() {
                 <path d="M3 12h18M3 6l9-3 9 3M3 18l9 3 9-3" />
               </svg>
             </div>
-            <span className="text-white font-semibold text-lg tracking-tight">Transit Platform</span>
+            <span className="text-white font-semibold text-lg tracking-tight">Phoenix Transit Analytics</span>
           </div>
 
           <div>
             <h1 className="text-3xl font-bold text-white mb-3 leading-snug">
-              Valley Metro<br />Performance Intelligence
+              Real-Time Performance<br />Intelligence
             </h1>
             <p className="text-gray-300 text-sm leading-relaxed max-w-xs">
               Real-time OTP, dwell analysis, trip playback, and AI-generated weekly briefs — built for transit planners.
@@ -93,7 +93,7 @@ export default function LoginPage() {
           </div>
 
           <p className="text-gray-500 text-xs">
-            Phoenix, Arizona · Valley Metro Rail &amp; Bus
+            Phoenix, Arizona · {new Date().getFullYear()}
           </p>
         </div>
       </div>
