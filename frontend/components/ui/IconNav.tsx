@@ -151,13 +151,32 @@ export default function IconNav({ user }: { user: User }) {
           {expanded && <span className="text-sm">Filters</span>}
         </button>
 
-        {/* Settings */}
+        {/* Account */}
         <Link
-          href="/settings/subscriptions"
-          title="Settings"
+          href="/settings/account"
+          title="Account"
           className={cn(
             'h-10 rounded-lg flex items-center transition-colors',
-            pathname.startsWith('/settings')
+            pathname.startsWith('/settings/account')
+              ? 'bg-blue-600/20 text-blue-400'
+              : 'text-gray-500 hover:text-white hover:bg-gray-800',
+            expanded ? 'px-2 gap-3 w-full' : 'w-10 justify-center'
+          )}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="w-5 h-5 shrink-0">
+            <circle cx="12" cy="8" r="4" />
+            <path strokeLinecap="round" d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
+          </svg>
+          {expanded && <span className="text-sm">Account</span>}
+        </Link>
+
+        {/* Subscriptions */}
+        <Link
+          href="/settings/subscriptions"
+          title="Subscriptions"
+          className={cn(
+            'h-10 rounded-lg flex items-center transition-colors',
+            pathname.startsWith('/settings/subscriptions')
               ? 'bg-blue-600/20 text-blue-400'
               : 'text-gray-500 hover:text-white hover:bg-gray-800',
             expanded ? 'px-2 gap-3 w-full' : 'w-10 justify-center'
@@ -167,7 +186,7 @@ export default function IconNav({ user }: { user: User }) {
             <path strokeLinecap="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
             <circle cx="12" cy="12" r="3" />
           </svg>
-          {expanded && <span className="text-sm">Settings</span>}
+          {expanded && <span className="text-sm">Subscriptions</span>}
         </Link>
 
         {/* Avatar / sign out */}
