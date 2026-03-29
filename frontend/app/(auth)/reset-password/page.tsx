@@ -15,11 +15,20 @@ function ResetPasswordForm() {
   const supabase = createClient()
 
   useEffect(() => {
-    // Use a local flag to avoid stale closure in the timeout
-    let isReady = false
+    const params = new URLSearchParams(window.location.search)
+    const tokenHash = params.get('token_hash')
+    const type = params.get('type')
 
-    // onAuthStateChange triggers the client to initialize and process the URL.
-    // For PKCE flow, the client auto-exchanges ?code= and fires PASSWORD_RECOVERY.
+    if (tokenHash && type === 'recovery') {
+      supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' }).then(({ error }) => {
+        if (error) setExpired(true)
+        else setReady(true)
+      })
+      return
+    }
+
+    // Fallback: PKCE auto-exchange via onAuthStateChange (covers ?code= in URL)
+    let isReady = false
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY') {
         isReady = true
@@ -27,22 +36,15 @@ function ResetPasswordForm() {
       }
     })
 
-    // Also handle page refresh where a session already exists
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        isReady = true
-        setReady(true)
-      }
+      if (session) { isReady = true; setReady(true) }
     })
 
     const timer = setTimeout(() => {
       if (!isReady) setExpired(true)
     }, 10000)
 
-    return () => {
-      subscription.unsubscribe()
-      clearTimeout(timer)
-    }
+    return () => { subscription.unsubscribe(); clearTimeout(timer) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleReset(e: React.FormEvent) {
