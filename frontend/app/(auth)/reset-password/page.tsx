@@ -15,41 +15,29 @@ function ResetPasswordForm() {
   const supabase = createClient()
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const code = params.get('code')
-    const tokenHash = params.get('token_hash')
+    // Use a local flag to avoid stale closure in the timeout
+    let isReady = false
 
-    // PKCE flow: exchange code for session
-    if (code) {
-      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
-        if (error) setExpired(true)
-        else setReady(true)
-      })
-      return
-    }
-
-    // Token hash flow (newer Supabase OTP)
-    if (tokenHash) {
-      supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' }).then(({ error }) => {
-        if (error) setExpired(true)
-        else setReady(true)
-      })
-      return
-    }
-
-    // Implicit flow: onAuthStateChange fires PASSWORD_RECOVERY from hash
+    // onAuthStateChange triggers the client to initialize and process the URL.
+    // For PKCE flow, the client auto-exchanges ?code= and fires PASSWORD_RECOVERY.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'PASSWORD_RECOVERY') setReady(true)
+      if (event === 'PASSWORD_RECOVERY') {
+        isReady = true
+        setReady(true)
+      }
     })
 
-    // Also check for an existing session (e.g. page refresh)
+    // Also handle page refresh where a session already exists
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) setReady(true)
+      if (session) {
+        isReady = true
+        setReady(true)
+      }
     })
 
     const timer = setTimeout(() => {
-      if (!ready) setExpired(true)
-    }, 5000)
+      if (!isReady) setExpired(true)
+    }, 10000)
 
     return () => {
       subscription.unsubscribe()
