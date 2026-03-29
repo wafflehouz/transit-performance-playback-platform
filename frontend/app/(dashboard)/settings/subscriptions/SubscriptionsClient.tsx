@@ -8,10 +8,10 @@ const MAX_SUBSCRIPTIONS = 5
 
 interface Subscription {
   id: string
-  route_id: string
-  route_name: string
+  route_id: string | null
+  group_name: string | null
+  frequency: string
   created_at: string
-  active: boolean
 }
 
 interface RouteOption {
@@ -52,12 +52,11 @@ export default function SubscriptionsClient({ user }: { user: User }) {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
-  // Load subscriptions from Supabase
   async function loadSubscriptions() {
     setLoadingSubs(true)
     const { data, error } = await supabase
       .from('route_subscriptions')
-      .select('*')
+      .select('id, route_id, group_name, frequency, created_at')
       .eq('user_id', user.id)
       .order('created_at', { ascending: true })
     if (error) setError(error.message)
@@ -73,46 +72,39 @@ export default function SubscriptionsClient({ user }: { user: User }) {
       .finally(() => setLoadingRoutes(false))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Resolve display name from loaded routes list
+  function routeLabel(sub: Subscription): string {
+    if (sub.group_name) return `Group: ${sub.group_name}`
+    const r = routes.find((r) => r.route_id === sub.route_id)
+    if (r) return `${r.route_short_name} — ${r.route_long_name}`
+    return sub.route_id ?? '—'
+  }
+
   async function handleAdd() {
     if (!selectedRouteId) return
     if (subscriptions.length >= MAX_SUBSCRIPTIONS) {
       setError(`Maximum of ${MAX_SUBSCRIPTIONS} subscriptions allowed.`)
       return
     }
-    const route = routes.find((r) => r.route_id === selectedRouteId)
-    if (!route) return
 
     setSaving(true)
     setError(null)
     setSuccess(null)
 
     const { error } = await supabase.from('route_subscriptions').insert({
-      user_id:    user.id,
-      route_id:   route.route_id,
-      route_name: `${route.route_short_name} — ${route.route_long_name}`,
-      active:     true,
+      user_id:   user.id,
+      route_id:  selectedRouteId,
+      frequency: 'weekly',
     })
 
     if (error) {
       setError(error.code === '23505' ? 'Already subscribed to this route.' : error.message)
     } else {
-      setSuccess(`Subscribed to Route ${route.route_short_name}.`)
+      const r = routes.find((r) => r.route_id === selectedRouteId)
+      setSuccess(`Subscribed to Route ${r?.route_short_name ?? selectedRouteId}.`)
       setSelectedRouteId('')
       await loadSubscriptions()
     }
-    setSaving(false)
-  }
-
-  async function handleToggle(sub: Subscription) {
-    setSaving(true)
-    setError(null)
-    setSuccess(null)
-    const { error } = await supabase
-      .from('route_subscriptions')
-      .update({ active: !sub.active })
-      .eq('id', sub.id)
-    if (error) setError(error.message)
-    else await loadSubscriptions()
     setSaving(false)
   }
 
@@ -124,15 +116,16 @@ export default function SubscriptionsClient({ user }: { user: User }) {
       .from('route_subscriptions')
       .delete()
       .eq('id', sub.id)
-    if (error) setError(error.message)
-    else {
-      setSuccess(`Removed Route ${sub.route_name}.`)
+    if (error) {
+      setError(error.message)
+    } else {
+      setSuccess(`Removed ${routeLabel(sub)}.`)
       await loadSubscriptions()
     }
     setSaving(false)
   }
 
-  const subscribedRouteIds = new Set(subscriptions.map((s) => s.route_id))
+  const subscribedRouteIds = new Set(subscriptions.map((s) => s.route_id).filter(Boolean))
   const availableRoutes = routes.filter((r) => !subscribedRouteIds.has(r.route_id))
   const atLimit = subscriptions.length >= MAX_SUBSCRIPTIONS
 
@@ -141,10 +134,10 @@ export default function SubscriptionsClient({ user }: { user: User }) {
       <h1 className="text-xl font-semibold text-white mb-1">Weekly Report Subscriptions</h1>
       <p className="text-gray-400 text-sm mb-6">
         Receive a weekly AI-generated performance brief for up to {MAX_SUBSCRIPTIONS} routes,
-        delivered every Monday morning to <span className="text-gray-300">{user.email}</span>.
+        delivered every Monday morning to{' '}
+        <span className="text-gray-300">{user.email}</span>.
       </p>
 
-      {/* Feedback */}
       {error && (
         <div className="mb-4 px-4 py-3 bg-red-900/20 border border-red-800 rounded-lg text-red-400 text-sm">
           {error}
@@ -194,18 +187,12 @@ export default function SubscriptionsClient({ user }: { user: User }) {
       {/* Subscription list */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-800 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-300">
-            Active subscriptions
-          </h2>
-          <span className="text-xs text-gray-600">
-            {subscriptions.length} / {MAX_SUBSCRIPTIONS}
-          </span>
+          <h2 className="text-sm font-semibold text-gray-300">Active subscriptions</h2>
+          <span className="text-xs text-gray-600">{subscriptions.length} / {MAX_SUBSCRIPTIONS}</span>
         </div>
 
         {loadingSubs ? (
-          <div className="px-5 py-8 text-center text-gray-600 text-sm animate-pulse">
-            Loading…
-          </div>
+          <div className="px-5 py-8 text-center text-gray-600 text-sm animate-pulse">Loading…</div>
         ) : subscriptions.length === 0 ? (
           <div className="px-5 py-8 text-center text-gray-600 text-sm">
             No subscriptions yet. Add a route above to get started.
@@ -217,29 +204,15 @@ export default function SubscriptionsClient({ user }: { user: User }) {
                 key={sub.id}
                 className={`px-5 py-4 flex items-center gap-4 ${i < subscriptions.length - 1 ? 'border-b border-gray-800' : ''}`}
               >
-                {/* Active toggle */}
-                <button
-                  onClick={() => handleToggle(sub)}
-                  disabled={saving}
-                  title={sub.active ? 'Pause subscription' : 'Resume subscription'}
-                  className={`w-9 h-5 rounded-full transition-colors shrink-0 relative ${sub.active ? 'bg-violet-600' : 'bg-gray-700'}`}
-                >
-                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${sub.active ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                </button>
-
-                {/* Route info */}
                 <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium truncate ${sub.active ? 'text-white' : 'text-gray-500'}`}>
-                    {sub.route_name}
-                  </p>
+                  <p className="text-sm font-medium text-white truncate">{routeLabel(sub)}</p>
                   <p className="text-xs text-gray-600 mt-0.5">
-                    {sub.active ? 'Weekly · every Monday' : 'Paused'}
-                    {' · subscribed '}
-                    {new Date(sub.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    Weekly · every Monday · subscribed{' '}
+                    {new Date(sub.created_at).toLocaleDateString('en-US', {
+                      month: 'short', day: 'numeric', year: 'numeric',
+                    })}
                   </p>
                 </div>
-
-                {/* Remove */}
                 <button
                   onClick={() => handleRemove(sub)}
                   disabled={saving}
@@ -256,11 +229,9 @@ export default function SubscriptionsClient({ user }: { user: User }) {
         )}
       </div>
 
-      {/* Info footer */}
       <p className="text-xs text-gray-600 mt-4">
-        Reports are generated Sunday night and delivered Monday morning. Each report covers the
-        prior 7 days and includes OTP trend, top delayed stops, dwell summary, and an
-        AI-generated brief written for transit planners.
+        Reports cover the prior 7 days and include OTP trend, top delayed stops, dwell summary,
+        and an AI-generated brief written for transit planners.
       </p>
     </div>
   )

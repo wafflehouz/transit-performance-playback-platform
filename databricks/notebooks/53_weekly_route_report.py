@@ -72,11 +72,12 @@ resp = requests.get(
         "apikey":        SUPABASE_SVC_KEY,
         "Authorization": f"Bearer {SUPABASE_SVC_KEY}",
     },
-    params={"active": "eq.true", "select": "user_id,route_id,route_name"},
+    params={"select": "user_id,route_id,group_name,frequency"},
 )
 resp.raise_for_status()
-subscriptions = resp.json()
-print(f"Active subscriptions: {len(subscriptions)}")
+# Only process route-level subscriptions for now (route_id is not null)
+subscriptions = [s for s in resp.json() if s.get("route_id")]
+print(f"Active route subscriptions: {len(subscriptions)}")
 
 if not subscriptions:
     print("No active subscriptions — exiting.")
@@ -423,10 +424,9 @@ def send_email(to_email: str, subject: str, html: str) -> bool:
 results = []
 
 for sub in subscriptions:
-    user_id    = sub["user_id"]
-    route_id   = sub["route_id"]
-    route_name = sub["route_name"]
-    to_email   = email_map.get(user_id)
+    user_id  = sub["user_id"]
+    route_id = sub["route_id"]
+    to_email = email_map.get(user_id)
 
     if not to_email:
         print(f"  SKIP {route_name}: no email resolved for user {user_id}")
@@ -444,11 +444,14 @@ for sub in subscriptions:
             results.append({"user_id": user_id, "route_id": route_id, "status": "NO_DATA"})
             continue
 
+        short_name  = data["summary"].get("route_short_name", route_id)
+        long_name   = data["summary"].get("route_long_name", "")
+        route_label = f"{short_name} — {long_name}".strip(" —")
+
         print(f"  Generating AI narrative…")
-        narrative = generate_narrative(route_name, data)
+        narrative = generate_narrative(route_label, data)
 
         print(f"  Building and sending email…")
-        short_name = data["summary"].get("route_short_name", route_name)
         html = build_html(short_name, data, narrative, to_email)
         ok   = send_email(to_email, f"Weekly Report: Route {short_name} — {week_label}", html)
 
