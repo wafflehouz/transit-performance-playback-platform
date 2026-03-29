@@ -10,13 +10,29 @@ export default function ResetPasswordPage() {
   const [loading, setLoading] = useState(false)
   const [done, setDone] = useState(false)
   const [ready, setReady] = useState(false)
+  const [expired, setExpired] = useState(false)
 
   const supabase = createClient()
 
   useEffect(() => {
-    // Supabase puts the session tokens in the URL hash after redirect
-    supabase.auth.onAuthStateChange((event) => {
-      if (event === 'PASSWORD_RECOVERY') setReady(true)
+    // Supabase embeds tokens in the URL hash after redirect.
+    // getSession() will automatically exchange them into a session.
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        setReady(true)
+      } else {
+        // Fall back to listening for the PASSWORD_RECOVERY event
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+          if (event === 'PASSWORD_RECOVERY') setReady(true)
+          if (event === 'SIGNED_OUT') setExpired(true)
+        })
+        // If nothing fires within 5s, the link is expired/invalid
+        const timer = setTimeout(() => setExpired(true), 5000)
+        return () => {
+          subscription.unsubscribe()
+          clearTimeout(timer)
+        }
+      }
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -62,6 +78,14 @@ export default function ResetPasswordPage() {
               <p className="text-gray-400 text-sm mb-4">You can now sign in with your new password.</p>
               <a href="/login" className="text-sm text-blue-400 hover:text-blue-300 transition-colors">
                 Go to sign in
+              </a>
+            </div>
+          ) : expired ? (
+            <div className="text-center py-4">
+              <p className="text-white font-semibold mb-1">Link expired or invalid</p>
+              <p className="text-gray-400 text-sm mb-4">Password reset links expire after 1 hour. Please request a new one.</p>
+              <a href="/login" className="text-sm text-blue-400 hover:text-blue-300 transition-colors">
+                Back to sign in
               </a>
             </div>
           ) : !ready ? (
