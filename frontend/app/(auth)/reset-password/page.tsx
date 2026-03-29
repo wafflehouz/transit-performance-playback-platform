@@ -2,8 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
 
 function ResetPasswordForm() {
   const [password, setPassword] = useState('')
@@ -15,22 +13,26 @@ function ResetPasswordForm() {
   const [expired, setExpired] = useState(false)
 
   const supabase = createClient()
-  const searchParams = useSearchParams()
 
   useEffect(() => {
-    const code = searchParams.get('code')
-    if (code) {
-      // Client-side PKCE exchange — must happen here where the code verifier is in localStorage
-      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
-        if (error) setExpired(true)
-        else setReady(true)
-      })
-    } else {
-      // No code in URL — check if already has a valid session
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session) setReady(true)
-        else setExpired(true)
-      })
+    // Implicit flow: Supabase puts tokens in the URL hash
+    // onAuthStateChange fires PASSWORD_RECOVERY when it detects the hash
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') setReady(true)
+    })
+
+    // Also check for an existing session (e.g. page refresh)
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) setReady(true)
+    })
+
+    const timer = setTimeout(() => {
+      if (!ready) setExpired(true)
+    }, 5000)
+
+    return () => {
+      subscription.unsubscribe()
+      clearTimeout(timer)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -137,13 +139,7 @@ export default function ResetPasswordPage() {
           </div>
           <span className="text-white font-semibold text-lg tracking-tight">Phoenix Transit Analytics</span>
         </div>
-        <Suspense fallback={
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 text-center">
-            <p className="text-gray-400 text-sm animate-pulse">Loading…</p>
-          </div>
-        }>
-          <ResetPasswordForm />
-        </Suspense>
+        <ResetPasswordForm />
       </div>
     </div>
   )
