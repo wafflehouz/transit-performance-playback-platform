@@ -303,11 +303,13 @@ def build_html(route_name: str, data: dict, narrative: str, user_email: str) -> 
     )
 
     trend_rows = "".join(
-        f"<tr><td style='padding:4px 8px;color:#9ca3af;font-size:12px;'>{r['service_date']}</td>"
-        f"<td style='padding:4px 8px;color:#f9fafb;font-size:12px;text-align:right;'>{r['on_time_pct']}%</td>"
-        f"<td style='padding:4px 8px;font-size:12px;'>"
-        f"<div style='background:#374151;border-radius:4px;overflow:hidden;width:120px;height:8px;'>"
-        f"<div style='background:{otp_color};width:{r[\"on_time_pct\"]}%;height:100%;'></div></div></td></tr>"
+        (lambda pct: (
+            f"<tr><td style='padding:4px 8px;color:#9ca3af;font-size:12px;'>{r['service_date']}</td>"
+            f"<td style='padding:4px 8px;color:#f9fafb;font-size:12px;text-align:right;'>{pct}%</td>"
+            f"<td style='padding:4px 8px;font-size:12px;'>"
+            f"<div style='background:#374151;border-radius:4px;overflow:hidden;width:120px;height:8px;'>"
+            f"<div style='background:{otp_color};width:{pct}%;height:100%;'></div></div></td></tr>"
+        ))(r["on_time_pct"])
         for r in data["trend"]
     )
 
@@ -404,7 +406,7 @@ def send_email(to_email: str, subject: str, html: str) -> bool:
             "Content-Type":  "application/json",
         },
         json={
-            "from":    "Transit Platform <reports@yourdomain.com>",
+            "from":    "Transit Platform <reports@phx-transit-analytics.com>",
             "to":      [to_email],
             "subject": subject,
             "html":    html,
