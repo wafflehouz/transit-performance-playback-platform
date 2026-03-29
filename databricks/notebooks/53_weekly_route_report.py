@@ -32,6 +32,11 @@ spark.conf.set("spark.sql.session.timeZone", "UTC")
 
 # COMMAND ----------
 
+spark.sql(f"USE CATALOG {CATALOG}")
+spark.sql(f"USE SCHEMA {SCHEMA}")
+
+# COMMAND ----------
+
 # MAGIC %pip install openai requests --quiet
 
 # COMMAND ----------
