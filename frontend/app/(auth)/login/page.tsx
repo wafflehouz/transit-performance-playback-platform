@@ -40,7 +40,7 @@ export default function LoginPage() {
     setLoading(true)
     setError(null)
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: 'https://www.phx-transit-analytics.com/api/auth/callback?next=/reset-password',
+      redirectTo: 'https://www.phx-transit-analytics.com/api/auth/reset-callback',
     })
     if (error) setError(error.message)
     else setResetSent(true)
