@@ -53,8 +53,15 @@ function ResetPasswordForm() {
     setLoading(true)
     setError(null)
     const { error } = await supabase.auth.updateUser({ password })
-    if (error) setError(error.message)
-    else setDone(true)
+    if (error) {
+      setError(error.message)
+      setLoading(false)
+      return
+    }
+    // Sign out the recovery session so the Supabase client doesn't fire
+    // a post-auth redirect to /api/auth/callback after password update.
+    await supabase.auth.signOut()
+    setDone(true)
     setLoading(false)
   }
 
