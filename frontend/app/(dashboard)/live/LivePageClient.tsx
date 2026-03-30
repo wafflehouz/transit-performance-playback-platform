@@ -74,6 +74,8 @@ export default function LivePageClient() {
   const [routeNames, setRouteNames] = useState<Map<string, string>>(new Map())
   const [routeTypes, setRouteTypes] = useState<Map<string, number>>(new Map())
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null)
+  const [routesLoading, setRoutesLoading] = useState(true)
+  const [routeNamesLoading, setRouteNamesLoading] = useState(false)
 
   // Feed
   const [feed, setFeed] = useState<FeedResponse | null>(null)
@@ -151,12 +153,25 @@ export default function LivePageClient() {
     })
   }, [selectedRouteId])
 
+  // Warmup: ping Databricks on mount so the serverless warehouse starts before Step 2 fires
+  useEffect(() => {
+    fetch('/api/databricks/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sql: 'SELECT 1' }),
+    }).catch(() => {})
+  }, [])
+
   // Step 1: get active route IDs from Render immediately (fast — already cached)
   useEffect(() => {
     fetch(`${RENDER_API}/vehicles/routes`)
       .then((r) => r.json())
-      .then((d: { route_ids: string[] }) => setRouteIds(d.route_ids ?? []))
+      .then((d: { route_ids: string[] }) => {
+        setRouteIds(d.route_ids ?? [])
+        setRouteNamesLoading(true)
+      })
       .catch(() => {})
+      .finally(() => setRoutesLoading(false))
   }, [])
 
   // Step 2: enrich with human-readable names from Databricks in background
@@ -185,6 +200,7 @@ export default function LivePageClient() {
         setRouteTypes(types)
       })
       .catch(() => {})
+      .finally(() => setRouteNamesLoading(false))
   }, [routeIds])
 
   // Build display routes merging IDs + names — memoized to avoid infinite filter panel loop
@@ -241,9 +257,11 @@ export default function LivePageClient() {
         routes={routes}
         selectedRouteId={selectedRouteId}
         onSelect={setSelectedRouteId}
+        routesLoading={routesLoading}
+        routeNamesLoading={routeNamesLoading}
       />
     )
-  }, [routes, selectedRouteId])
+  }, [routes, selectedRouteId, routesLoading, routeNamesLoading])
 
   return (
     <div className="flex flex-col h-full relative">
@@ -325,25 +343,39 @@ export default function LivePageClient() {
 // ── Filter panel ───────────────────────────────────────────────────────────────
 
 function LiveFilters({
-  routes, selectedRouteId, onSelect,
+  routes, selectedRouteId, onSelect, routesLoading, routeNamesLoading,
 }: {
   routes: DimRoute[]
   selectedRouteId: string | null
   onSelect: (id: string | null) => void
+  routesLoading: boolean
+  routeNamesLoading: boolean
 }) {
+  const sectionLabel = routesLoading
+    ? 'Route'
+    : `Route (${routes.length} active)`
+
   return (
-    <FilterSection label={`Route ${routes.length > 0 ? `(${routes.length} active)` : '—'}`}>
-      <SingleRouteFilter routes={routes} selectedId={selectedRouteId} onSelect={onSelect} />
+    <FilterSection label={sectionLabel}>
+      <SingleRouteFilter
+        routes={routes}
+        selectedId={selectedRouteId}
+        onSelect={onSelect}
+        routesLoading={routesLoading}
+        routeNamesLoading={routeNamesLoading}
+      />
     </FilterSection>
   )
 }
 
 function SingleRouteFilter({
-  routes, selectedId, onSelect,
+  routes, selectedId, onSelect, routesLoading, routeNamesLoading,
 }: {
   routes: DimRoute[]
   selectedId: string | null
   onSelect: (id: string | null) => void
+  routesLoading: boolean
+  routeNamesLoading: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -366,7 +398,7 @@ function SingleRouteFilter({
   const selected = routes.find((r) => r.route_id === selectedId)
   const label = selected
     ? `Route ${selected.route_short_name}${selected.route_long_name ? ` – ${selected.route_long_name}` : ''}`
-    : 'Select a route…'
+    : routesLoading ? 'Loading routes…' : 'Select a route…'
 
   return (
     <div ref={ref} className="relative">
@@ -375,9 +407,16 @@ function SingleRouteFilter({
         className="w-full flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-left transition-colors hover:border-gray-600"
       >
         <span className={selectedId ? 'text-white truncate pr-2' : 'text-gray-500'}>{label}</span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-gray-500 shrink-0">
-          <path strokeLinecap="round" d="M19 9l-7 7-7-7" />
-        </svg>
+        {routesLoading ? (
+          <svg className="w-4 h-4 text-gray-500 shrink-0 animate-spin" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={3} strokeOpacity={0.25} />
+            <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth={3} strokeLinecap="round" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-gray-500 shrink-0">
+            <path strokeLinecap="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        )}
       </button>
 
       {open && (
@@ -393,30 +432,51 @@ function SingleRouteFilter({
             />
           </div>
           <div className="overflow-y-auto flex-1">
-            {selectedId && (
-              <button
-                onClick={() => { onSelect(null); setOpen(false) }}
-                className="w-full text-left px-3 py-2 text-xs text-blue-400 hover:bg-gray-700 border-b border-gray-700"
-              >
-                Clear selection
-              </button>
-            )}
-            {filtered.map((r) => (
-              <button
-                key={r.route_id}
-                onClick={() => { onSelect(r.route_id); setOpen(false) }}
-                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gray-700 transition-colors ${
-                  r.route_id === selectedId ? 'text-blue-300 bg-blue-600/10' : 'text-gray-300'
-                }`}
-              >
-                <span className="font-semibold w-8 shrink-0">{r.route_short_name}</span>
-                {r.route_long_name && (
-                  <span className="text-gray-500 text-xs truncate">{r.route_long_name}</span>
+            {routesLoading ? (
+              <div className="flex flex-col items-center justify-center py-6 gap-2">
+                <svg className="w-5 h-5 text-blue-400 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={3} strokeOpacity={0.25} />
+                  <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth={3} strokeLinecap="round" />
+                </svg>
+                <p className="text-gray-500 text-xs">Fetching active routes…</p>
+              </div>
+            ) : (
+              <>
+                {selectedId && (
+                  <button
+                    onClick={() => { onSelect(null); setOpen(false) }}
+                    className="w-full text-left px-3 py-2 text-xs text-blue-400 hover:bg-gray-700 border-b border-gray-700"
+                  >
+                    Clear selection
+                  </button>
                 )}
-              </button>
-            ))}
-            {filtered.length === 0 && (
-              <p className="text-gray-600 text-xs text-center py-4">No routes found</p>
+                {filtered.map((r) => (
+                  <button
+                    key={r.route_id}
+                    onClick={() => { onSelect(r.route_id); setOpen(false) }}
+                    className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gray-700 transition-colors ${
+                      r.route_id === selectedId ? 'text-blue-300 bg-blue-600/10' : 'text-gray-300'
+                    }`}
+                  >
+                    <span className="font-semibold w-8 shrink-0">{r.route_short_name}</span>
+                    {r.route_long_name && (
+                      <span className="text-gray-500 text-xs truncate">{r.route_long_name}</span>
+                    )}
+                  </button>
+                ))}
+                {filtered.length === 0 && (
+                  <p className="text-gray-600 text-xs text-center py-4">No routes found</p>
+                )}
+                {routeNamesLoading && routes.length > 0 && (
+                  <div className="flex items-center gap-1.5 px-3 py-2 border-t border-gray-700/60">
+                    <svg className="w-3 h-3 text-gray-600 animate-spin shrink-0" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={3} strokeOpacity={0.25} />
+                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth={3} strokeLinecap="round" />
+                    </svg>
+                    <span className="text-gray-600 text-xs">Loading route names…</span>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
