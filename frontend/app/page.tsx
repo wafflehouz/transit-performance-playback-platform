@@ -16,13 +16,9 @@ export default function RootPage() {
       return
     }
 
-    // PKCE flow: code or token_hash in query params
+    // Only forward recovery-type tokens to reset-password
     const params = new URLSearchParams(search)
-    if (
-      params.get('type') === 'recovery' ||
-      params.has('code') ||
-      params.has('token_hash')
-    ) {
+    if (params.get('type') === 'recovery') {
       router.replace('/reset-password' + search)
       return
     }

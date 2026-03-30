@@ -64,6 +64,7 @@ export default function LoginPage() {
       password,
       options: {
         data: { display_name: displayName.trim() || email.split('@')[0] },
+        emailRedirectTo: 'https://www.phx-transit-analytics.com/api/auth/callback',
       },
     })
     if (error) setError(error.message)
