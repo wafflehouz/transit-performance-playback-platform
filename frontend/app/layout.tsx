@@ -8,6 +8,27 @@ const geistMono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin']
 export const metadata: Metadata = {
   title: 'Transit Performance Platform',
   description: 'Valley Metro planner performance intelligence',
+  openGraph: {
+    title: 'Transit Performance Platform',
+    description: 'Real-time and historical transit performance analytics for the Phoenix metro network.',
+    url: 'https://www.phx-transit-analytics.com',
+    siteName: 'PHX Transit Analytics',
+    images: [
+      {
+        url: 'https://www.phx-transit-analytics.com/og-image.jpg',
+        width: 1200,
+        height: 630,
+        alt: 'Downtown Phoenix light rail',
+      },
+    ],
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Transit Performance Platform',
+    description: 'Real-time and historical transit performance analytics for the Phoenix metro network.',
+    images: ['https://www.phx-transit-analytics.com/og-image.jpg'],
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
