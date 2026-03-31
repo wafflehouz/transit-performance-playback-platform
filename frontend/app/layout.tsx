@@ -9,10 +9,10 @@ export const metadata: Metadata = {
   title: 'Transit Performance Platform',
   description: 'Valley Metro planner performance intelligence',
   openGraph: {
-    title: 'Transit Performance Platform',
-    description: 'Real-time and historical transit performance analytics for the Phoenix metro network.',
+    title: 'Transit Analytics',
+    description: 'Real-Time Performance Insights',
     url: 'https://www.phx-transit-analytics.com',
-    siteName: 'PHX Transit Analytics',
+    siteName: 'Transit Analytics',
     images: [
       {
         url: 'https://www.phx-transit-analytics.com/og-image.jpg',
@@ -25,8 +25,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Transit Performance Platform',
-    description: 'Real-time and historical transit performance analytics for the Phoenix metro network.',
+    title: 'Transit Analytics',
+    description: 'Real-Time Performance Insights',
     images: ['https://www.phx-transit-analytics.com/og-image.jpg'],
   },
 }
