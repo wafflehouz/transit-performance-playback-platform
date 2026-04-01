@@ -32,6 +32,26 @@ function timepointWhere(timepointOnly: boolean, alias = 'f'): string {
   )`
 }
 
+// Terminal exclusion: strips first + last stop_sequence per trip.
+// Returns CTE body (no leading WITH), join clause, and where clause.
+// Queries with no existing CTE wrap with WITH; queries with existing CTEs append with a comma.
+function terminalCte(exclude: boolean): string {
+  if (!exclude) return ''
+  return `
+  trip_bounds AS (
+    SELECT trip_id, MIN(stop_sequence) AS first_seq, MAX(stop_sequence) AS last_seq
+    FROM gold_stop_dwell_fact
+    WHERE service_date >= :startDate AND service_date <= :endDate
+    GROUP BY trip_id
+  )`
+}
+function terminalJoin(alias: string, exclude: boolean): string {
+  return exclude ? `INNER JOIN trip_bounds tb ON ${alias}.trip_id = tb.trip_id` : ''
+}
+function terminalWhere(alias: string, exclude: boolean): string {
+  return exclude ? `AND ${alias}.stop_sequence != tb.first_seq AND ${alias}.stop_sequence != tb.last_seq` : ''
+}
+
 function otpCols(alias = 'f') {
   const a = alias
   const early   = `${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.early_allowed, 0) = 0`
@@ -69,29 +89,35 @@ export const ROUTE_GROUPS_SQL = `
 
 // ── Summary (all routes or group) ──────────────────────────────────────────────
 
-export function summaryAllSql(groupName: string | null, timepointOnly: boolean) {
+export function summaryAllSql(groupName: string | null, timepointOnly: boolean, excludeTerminals = false) {
   const groupJoin = groupName
     ? `INNER JOIN gold_route_groups g ON f.route_id = g.route_id AND g.group_name = '${groupName.replace(/'/g, "''")}'`
     : ''
+  const tc = terminalCte(excludeTerminals)
   return `
+    ${tc ? `WITH${tc}` : ''}
     SELECT
       COUNT(DISTINCT f.route_id)  AS route_count,
       COUNT(*)                    AS total_stops,
       ${otpCols('f')}
     FROM gold_stop_dwell_fact f
     ${groupJoin}
+    ${terminalJoin('f', excludeTerminals)}
     WHERE f.service_date >= :startDate
       AND f.service_date <= :endDate
       AND f.actual_arrival_ts IS NOT NULL
     ${timepointWhere(timepointOnly, 'f')}
+    ${terminalWhere('f', excludeTerminals)}
   `
 }
 
-export function otpTrendSql(groupName: string | null, timepointOnly: boolean) {
+export function otpTrendSql(groupName: string | null, timepointOnly: boolean, excludeTerminals = false) {
   const groupJoin = groupName
     ? `INNER JOIN gold_route_groups g ON f.route_id = g.route_id AND g.group_name = '${groupName.replace(/'/g, "''")}'`
     : ''
+  const tc = terminalCte(excludeTerminals)
   return `
+    ${tc ? `WITH${tc}` : ''}
     SELECT
       f.service_date,
       ROUND(AVG(CASE WHEN ${EARLY}   THEN 1.0 ELSE 0.0 END) * 100, 1) AS early_pct,
@@ -100,21 +126,25 @@ export function otpTrendSql(groupName: string | null, timepointOnly: boolean) {
       COUNT(*) AS total_stops
     FROM gold_stop_dwell_fact f
     ${groupJoin}
+    ${terminalJoin('f', excludeTerminals)}
     WHERE f.service_date >= :startDate
       AND f.service_date <= :endDate
       AND f.actual_arrival_ts IS NOT NULL
     ${timepointWhere(timepointOnly, 'f')}
+    ${terminalWhere('f', excludeTerminals)}
     GROUP BY f.service_date
     ORDER BY f.service_date
   `
 }
 
-export function routesTableSql(groupName: string | null, direction: 0 | 1 | 'both', timepointOnly: boolean) {
+export function routesTableSql(groupName: string | null, direction: 0 | 1 | 'both', timepointOnly: boolean, excludeTerminals = false) {
   const groupJoin = groupName
     ? `INNER JOIN gold_route_groups g ON f.route_id = g.route_id AND g.group_name = '${groupName.replace(/'/g, "''")}'`
     : ''
   const dirFilter = direction === 'both' ? '' : `AND f.direction_id = ${direction}`
+  const tc = terminalCte(excludeTerminals)
   return `
+    ${tc ? `WITH${tc}` : ''}
     SELECT
       f.route_id,
       r.route_short_name,
@@ -125,11 +155,13 @@ export function routesTableSql(groupName: string | null, direction: 0 | 1 | 'bot
     FROM gold_stop_dwell_fact f
     JOIN silver_dim_route r ON f.route_id = r.route_id
     ${groupJoin}
+    ${terminalJoin('f', excludeTerminals)}
     WHERE f.service_date >= :startDate
       AND f.service_date <= :endDate
       AND f.actual_arrival_ts IS NOT NULL
     ${dirFilter}
     ${timepointWhere(timepointOnly, 'f')}
+    ${terminalWhere('f', excludeTerminals)}
     GROUP BY f.route_id, r.route_short_name, r.route_long_name, r.route_type
     ORDER BY on_time_pct ASC
   `
@@ -137,20 +169,24 @@ export function routesTableSql(groupName: string | null, direction: 0 | 1 | 'bot
 
 // ── Single route ───────────────────────────────────────────────────────────────
 
-export function singleRouteSummarySql(routeId: string, direction: 0 | 1 | 'both', timepointOnly: boolean) {
+export function singleRouteSummarySql(routeId: string, direction: 0 | 1 | 'both', timepointOnly: boolean, excludeTerminals = false) {
   const dirFilter = direction === 'both' ? '' : `AND f.direction_id = ${direction}`
   const id = routeId.replace(/'/g, "''")
+  const tc = terminalCte(excludeTerminals)
   return `
+    ${tc ? `WITH${tc}` : ''}
     SELECT
       COUNT(*) AS total_stops,
       ${otpCols('f')}
     FROM gold_stop_dwell_fact f
+    ${terminalJoin('f', excludeTerminals)}
     WHERE f.service_date >= :startDate
       AND f.service_date <= :endDate
       AND f.route_id = '${id}'
       AND f.actual_arrival_ts IS NOT NULL
     ${dirFilter}
     ${timepointWhere(timepointOnly, 'f')}
+    ${terminalWhere('f', excludeTerminals)}
   `
 }
 
@@ -168,10 +204,12 @@ export function routeHeadsignSql(routeId: string) {
 }
 
 // Time-of-day: 15-min buckets in Phoenix local time (UTC-7, no DST)
-export function timeOfDaySql(routeId: string, direction: 0 | 1 | 'both', timepointOnly: boolean) {
+export function timeOfDaySql(routeId: string, direction: 0 | 1 | 'both', timepointOnly: boolean, excludeTerminals = false) {
   const dirFilter = direction === 'both' ? '' : `AND f.direction_id = ${direction}`
   const id = routeId.replace(/'/g, "''")
+  const tc = terminalCte(excludeTerminals)
   return `
+    ${tc ? `WITH${tc}` : ''}
     SELECT
       DATE_FORMAT(
         TIMESTAMPADD(MINUTE,
@@ -184,30 +222,33 @@ export function timeOfDaySql(routeId: string, direction: 0 | 1 | 'both', timepoi
       SUM(CASE WHEN ${LATE}    THEN 1 ELSE 0 END)                      AS late_count,
       COUNT(*)                                                          AS total_count
     FROM gold_stop_dwell_fact f
+    ${terminalJoin('f', excludeTerminals)}
     WHERE f.service_date >= :startDate
       AND f.service_date <= :endDate
       AND f.route_id = '${id}'
       AND f.actual_arrival_ts IS NOT NULL
     ${dirFilter}
     ${timepointWhere(timepointOnly)}
+    ${terminalWhere('f', excludeTerminals)}
     GROUP BY time_bucket
     ORDER BY time_bucket
   `
 }
 
 // Stop-level OTP sorted by stop sequence, with timepoint flag for display
-export function stopOtpSql(routeId: string, direction: 0 | 1 | 'both', timepointOnly: boolean) {
+export function stopOtpSql(routeId: string, direction: 0 | 1 | 'both', timepointOnly: boolean, excludeTerminals = false) {
   const dirFilter = direction === 'both' ? '' : `AND f.direction_id = ${direction}`
   const id = routeId.replace(/'/g, "''")
   const tpFilter = timepointOnly
     ? 'HAVING observations >= 3 AND COALESCE(tp.timepoint, 0) = 1'
     : 'HAVING observations >= 3'
+  const tc = terminalCte(excludeTerminals)
   return `
     WITH tp AS (
       SELECT stop_id, MAX(timepoint) AS timepoint
       FROM silver_fact_stop_schedule
       GROUP BY stop_id
-    )
+    )${tc ? `,${tc}` : ''}
     SELECT
       f.direction_id,
       f.stop_id,
@@ -223,11 +264,13 @@ export function stopOtpSql(routeId: string, direction: 0 | 1 | 'both', timepoint
     FROM gold_stop_dwell_fact f
     LEFT JOIN silver_dim_stop s ON f.stop_id = s.stop_id
     LEFT JOIN tp ON f.stop_id = tp.stop_id
+    ${terminalJoin('f', excludeTerminals)}
     WHERE f.service_date >= :startDate
       AND f.service_date <= :endDate
       AND f.route_id = '${id}'
       AND f.actual_arrival_ts IS NOT NULL
     ${dirFilter}
+    ${terminalWhere('f', excludeTerminals)}
     GROUP BY f.direction_id, f.stop_id, s.stop_name, tp.timepoint
     ${tpFilter}
     ORDER BY f.direction_id, stop_order
@@ -235,10 +278,12 @@ export function stopOtpSql(routeId: string, direction: 0 | 1 | 'both', timepoint
 }
 
 // Delay histogram: 1-min bins, capped at -20min to +60min
-export function delayHistogramSql(routeId: string, direction: 0 | 1 | 'both', timepointOnly: boolean) {
+export function delayHistogramSql(routeId: string, direction: 0 | 1 | 'both', timepointOnly: boolean, excludeTerminals = false) {
   const dirFilter = direction === 'both' ? '' : `AND f.direction_id = ${direction}`
   const id = routeId.replace(/'/g, "''")
+  const tc = terminalCte(excludeTerminals)
   return `
+    ${tc ? `WITH${tc}` : ''}
     SELECT
       ROUND(f.arrival_delay_seconds / 60.0) AS delay_minute,
       CASE
@@ -248,6 +293,7 @@ export function delayHistogramSql(routeId: string, direction: 0 | 1 | 'both', ti
       END                                    AS otp_category,
       COUNT(*)                               AS stop_count
     FROM gold_stop_dwell_fact f
+    ${terminalJoin('f', excludeTerminals)}
     WHERE f.service_date >= :startDate
       AND f.service_date <= :endDate
       AND f.route_id = '${id}'
@@ -255,15 +301,18 @@ export function delayHistogramSql(routeId: string, direction: 0 | 1 | 'both', ti
       AND f.arrival_delay_seconds BETWEEN -1200 AND 3600
     ${dirFilter}
     ${timepointWhere(timepointOnly)}
+    ${terminalWhere('f', excludeTerminals)}
     GROUP BY delay_minute, otp_category
     ORDER BY delay_minute
   `
 }
 
-export function singleRouteTrendSql(routeId: string, direction: 0 | 1 | 'both', timepointOnly: boolean) {
+export function singleRouteTrendSql(routeId: string, direction: 0 | 1 | 'both', timepointOnly: boolean, excludeTerminals = false) {
   const dirFilter = direction === 'both' ? '' : `AND f.direction_id = ${direction}`
   const id = routeId.replace(/'/g, "''")
+  const tc = terminalCte(excludeTerminals)
   return `
+    ${tc ? `WITH${tc}` : ''}
     SELECT
       f.service_date,
       ROUND(AVG(CASE WHEN ${EARLY}   THEN 1.0 ELSE 0.0 END) * 100, 1) AS early_pct,
@@ -271,12 +320,14 @@ export function singleRouteTrendSql(routeId: string, direction: 0 | 1 | 'both', 
       ROUND(AVG(CASE WHEN ${LATE}    THEN 1.0 ELSE 0.0 END) * 100, 1) AS late_pct,
       COUNT(*) AS total_stops
     FROM gold_stop_dwell_fact f
+    ${terminalJoin('f', excludeTerminals)}
     WHERE f.service_date >= :startDate
       AND f.service_date <= :endDate
       AND f.route_id = '${id}'
       AND f.actual_arrival_ts IS NOT NULL
     ${dirFilter}
     ${timepointWhere(timepointOnly)}
+    ${terminalWhere('f', excludeTerminals)}
     GROUP BY f.service_date
     ORDER BY f.service_date
   `

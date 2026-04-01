@@ -122,7 +122,7 @@ export default function OtpPageClient() {
   }
 
   // Fetch — each query independent so one failure doesn't block others
-  const fetchData = useCallback(async (f: OtpFilterState) => {
+  const fetchData = useCallback(async (f: OtpFilterState, excTerminals: boolean) => {
     setLoading(true)
     setError(null)
     setSummaryData(null)
@@ -144,11 +144,11 @@ export default function OtpPageClient() {
 
     if (f.mode === 'single' && f.routeId) {
       const [summary, trend, tod, hist, stops, hsigns] = await Promise.all([
-        safe(fetchJson(singleRouteSummarySql(f.routeId, f.direction, tp), params)),
-        safe(fetchJson(singleRouteTrendSql(f.routeId, f.direction, tp), params)),
-        safe(fetchJson(timeOfDaySql(f.routeId, f.direction, tp), params)),
-        safe(fetchJson(delayHistogramSql(f.routeId, f.direction, tp), params)),
-        safe(fetchJson(stopOtpSql(f.routeId, f.direction, tp), params)),
+        safe(fetchJson(singleRouteSummarySql(f.routeId, f.direction, tp, excTerminals), params)),
+        safe(fetchJson(singleRouteTrendSql(f.routeId, f.direction, tp, excTerminals), params)),
+        safe(fetchJson(timeOfDaySql(f.routeId, f.direction, tp, excTerminals), params)),
+        safe(fetchJson(delayHistogramSql(f.routeId, f.direction, tp, excTerminals), params)),
+        safe(fetchJson(stopOtpSql(f.routeId, f.direction, tp, excTerminals), params)),
         safe(fetchJson(routeHeadsignSql(f.routeId))),
       ])
       setSummaryData(summary[0] ?? null)
@@ -165,9 +165,9 @@ export default function OtpPageClient() {
       setHeadsigns(hsMap)
     } else {
       const [summary, trend, routeRows] = await Promise.all([
-        safe(fetchJson(summaryAllSql(f.groupName, tp), params)),
-        safe(fetchJson(otpTrendSql(f.groupName, tp), params)),
-        safe(fetchJson(routesTableSql(f.groupName, f.direction, tp), params)),
+        safe(fetchJson(summaryAllSql(f.groupName, tp, excTerminals), params)),
+        safe(fetchJson(otpTrendSql(f.groupName, tp, excTerminals), params)),
+        safe(fetchJson(routesTableSql(f.groupName, f.direction, tp, excTerminals), params)),
       ])
       setSummaryData(summary[0] ?? null)
       setTrendData(trend)
@@ -181,8 +181,8 @@ export default function OtpPageClient() {
   useEffect(() => {
     if (filters.mode === 'single' && !filters.routeId) return
     if (filters.mode === 'group' && !filters.groupName) return
-    fetchData(filters)
-  }, [filters, fetchData])
+    fetchData(filters, excludeTerminals)
+  }, [filters, fetchData, excludeTerminals])
 
   // Inject filter panel
   const filterNode = useMemo(
