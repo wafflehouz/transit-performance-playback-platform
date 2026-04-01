@@ -16,11 +16,12 @@
 //
 // Phoenix does not use drop_off_type. early_allowed is a Phoenix-specific custom
 // field in stop_times.txt: 0 = must hold if early, 1 = may depart early.
-// COALESCE defaults to 1 (permissive) for any rows pre-dating the column addition.
+// COALESCE defaults to 0 (must hold) — Phoenix leaves early_allowed NULL for regular stops
+// and explicitly sets it to 1 only for terminals/layovers where early departure is permitted.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const EARLY   = `arrival_delay_seconds < -60 AND COALESCE(early_allowed, 1) = 0`
-const ON_TIME = `(arrival_delay_seconds BETWEEN -60 AND 360 OR (arrival_delay_seconds < -60 AND COALESCE(early_allowed, 1) = 1))`
+const EARLY   = `arrival_delay_seconds < -60 AND COALESCE(early_allowed, 0) = 0`
+const ON_TIME = `(arrival_delay_seconds BETWEEN -60 AND 360 OR (arrival_delay_seconds < -60 AND COALESCE(early_allowed, 0) = 1))`
 const LATE    = `arrival_delay_seconds > 360`
 
 // When timepointOnly=true, restrict to stops flagged as timepoints in GTFS
@@ -33,8 +34,8 @@ function timepointWhere(timepointOnly: boolean, alias = 'f'): string {
 
 function otpCols(alias = 'f') {
   const a = alias
-  const early   = `${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.early_allowed, 1) = 0`
-  const onTime  = `(${a}.arrival_delay_seconds BETWEEN -60 AND 360 OR (${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.early_allowed, 1) = 1))`
+  const early   = `${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.early_allowed, 0) = 0`
+  const onTime  = `(${a}.arrival_delay_seconds BETWEEN -60 AND 360 OR (${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.early_allowed, 0) = 1))`
   const late    = `${a}.arrival_delay_seconds > 360`
   return `
     ROUND(AVG(CASE WHEN ${early}  THEN 1.0 ELSE 0.0 END) * 100, 1) AS early_pct,

@@ -77,7 +77,8 @@ if row_count == 0:
 
 # COMMAND ----------
 
-# early_allowed is a Phoenix-specific custom field (0=must hold if early, 1=may depart early).
+# early_allowed is a Phoenix-specific custom field (1=may depart early; NULL=must hold).
+# Phoenix leaves early_allowed NULL for regular stops and sets 1 only for terminals/layovers.
 # Guard against existing silver data that pre-dates notebook 01 adding the column.
 _sched_raw = spark.table(SILVER_FACT_STOP_SCHEDULE)
 _early_allowed_col = (
