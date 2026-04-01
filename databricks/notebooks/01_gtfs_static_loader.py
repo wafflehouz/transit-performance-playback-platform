@@ -293,6 +293,7 @@ fact_stop_schedule = (
         safe_col(raw_stop_times, "timepoint",           IntegerType()),
         safe_col(raw_stop_times, "pickup_type",         IntegerType()),
         safe_col(raw_stop_times, "drop_off_type",       IntegerType()),
+        safe_col(raw_stop_times, "early_allowed",       IntegerType()),  # Phoenix custom: 0=must hold if early, 1=may depart early
     )
     # Add seconds-since-midnight for schedule arithmetic in Gold
     .withColumn("scheduled_arrival_secs",   gtfs_time_udf(F.col("scheduled_arrival_time")))

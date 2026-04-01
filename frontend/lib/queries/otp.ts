@@ -3,21 +3,24 @@
 // Primary source: gold_stop_dwell_fact
 //   Columns: route_id, direction_id, trip_id, stop_id, stop_sequence,
 //            service_date, scheduled_arrival_ts, actual_arrival_ts,
-//            arrival_delay_seconds, pickup_type, drop_off_type
+//            arrival_delay_seconds, pickup_type, drop_off_type, early_allowed
 //   Filter:  actual_arrival_ts IS NOT NULL (unobserved stops excluded)
 //
-// OTP window (Swiftly standard):
-//   Early   = arrival_delay_seconds < -60  AND stop is a regular pickup stop
+// OTP window:
+//   Early   = arrival_delay_seconds < -60 AND early_allowed = 0
+//             (stop requires the vehicle to hold — departing early is a violation)
 //   On-Time = arrival_delay_seconds BETWEEN -60 AND 360
-//             OR stop is drop-off only (pickup_type=1) and arrived early
-//             (matches Swiftly "Include earlies as on time" for drop-off-only stops)
+//             OR (early AND early_allowed = 1)
+//             (stop permits early departure — early arrival is acceptable)
 //   Late    = arrival_delay_seconds > 360
+//
+// Phoenix does not use drop_off_type. early_allowed is a Phoenix-specific custom
+// field in stop_times.txt: 0 = must hold if early, 1 = may depart early.
+// COALESCE defaults to 1 (permissive) for any rows pre-dating the column addition.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Drop-off-only stops (pickup_type=1): early arrivals reclassified as on-time.
-// Requires pickup_type column in gold_stop_dwell_fact (added 2026-03-19).
-const EARLY   = `arrival_delay_seconds < -60 AND COALESCE(pickup_type, 0) = 0`
-const ON_TIME = `(arrival_delay_seconds BETWEEN -60 AND 360 OR (arrival_delay_seconds < -60 AND COALESCE(pickup_type, 0) = 1))`
+const EARLY   = `arrival_delay_seconds < -60 AND COALESCE(early_allowed, 1) = 0`
+const ON_TIME = `(arrival_delay_seconds BETWEEN -60 AND 360 OR (arrival_delay_seconds < -60 AND COALESCE(early_allowed, 1) = 1))`
 const LATE    = `arrival_delay_seconds > 360`
 
 // When timepointOnly=true, restrict to stops flagged as timepoints in GTFS
@@ -30,8 +33,8 @@ function timepointWhere(timepointOnly: boolean, alias = 'f'): string {
 
 function otpCols(alias = 'f') {
   const a = alias
-  const early   = `${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.pickup_type, 0) = 0`
-  const onTime  = `(${a}.arrival_delay_seconds BETWEEN -60 AND 360 OR (${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.pickup_type, 0) = 1))`
+  const early   = `${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.early_allowed, 1) = 0`
+  const onTime  = `(${a}.arrival_delay_seconds BETWEEN -60 AND 360 OR (${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.early_allowed, 1) = 1))`
   const late    = `${a}.arrival_delay_seconds > 360`
   return `
     ROUND(AVG(CASE WHEN ${early}  THEN 1.0 ELSE 0.0 END) * 100, 1) AS early_pct,

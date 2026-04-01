@@ -77,8 +77,17 @@ if row_count == 0:
 
 # COMMAND ----------
 
+# early_allowed is a Phoenix-specific custom field (0=must hold if early, 1=may depart early).
+# Guard against existing silver data that pre-dates notebook 01 adding the column.
+_sched_raw = spark.table(SILVER_FACT_STOP_SCHEDULE)
+_early_allowed_col = (
+    F.col("early_allowed").cast("int").alias("early_allowed")
+    if "early_allowed" in _sched_raw.columns
+    else F.lit(None).cast("int").alias("early_allowed")
+)
+
 schedule = (
-    spark.table(SILVER_FACT_STOP_SCHEDULE)
+    _sched_raw
     .select(
         "trip_id",
         "stop_sequence",
@@ -86,6 +95,7 @@ schedule = (
         "scheduled_departure_secs",
         F.col("pickup_type").cast("int"),   # 0=regular, 1=no pickup (drop-off only)
         F.col("drop_off_type").cast("int"), # 0=regular, 1=no drop-off (pickup only)
+        _early_allowed_col,
     )
 )
 
@@ -217,8 +227,9 @@ gold_dwell = joined.select(
     "actual_dwell_seconds",
     "scheduled_dwell_seconds",
     "dwell_delta_seconds",
-    "pickup_type",   # 0=regular, 1=no pickup (drop-off only) — used for OTP early reclassification
-    "drop_off_type", # 0=regular, 1=no drop-off (pickup only)
+    "pickup_type",    # 0=regular, 1=no pickup (drop-off only)
+    "drop_off_type",  # 0=regular, 1=no drop-off (pickup only)
+    "early_allowed",  # Phoenix custom: 0=must hold if early, 1=may depart early — used for OTP early classification
 )
 
 spark.sql(f"""
@@ -239,7 +250,8 @@ spark.sql(f"""
         scheduled_dwell_seconds  INT,
         dwell_delta_seconds      INT,
         pickup_type              INT,
-        drop_off_type            INT
+        drop_off_type            INT,
+        early_allowed            INT
     )
     USING DELTA
     PARTITIONED BY (service_date)
