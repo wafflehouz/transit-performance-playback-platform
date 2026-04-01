@@ -245,7 +245,7 @@ export default function OtpPageClient() {
             <span className="text-2xl font-bold tabular-nums" style={{ color: OTP_COLORS.onTime }}>
               {otpPct.toFixed(1)}%
             </span>
-            <span className="text-xs text-gray-500 leading-tight">on-<br />time</span>
+            <span className="text-xs text-gray-500">on-time</span>
           </div>
         )}
       </div>
