@@ -313,7 +313,7 @@ export default function LivePageClient() {
                 <div key={status} className="flex items-center justify-between text-xs">
                   <div className="flex items-center gap-2">
                     <div className="w-2.5 h-2.5 rounded-full" style={{ background: OTP_COLOR[status] }} />
-                    <span className="text-gray-300">{label}</span>
+                    <span className="text-gray-300 whitespace-nowrap">{label}</span>
                   </div>
                   <span className="text-white font-medium">
                     {count} ({Math.round((count / feed.vehicle_count) * 100)}%)
