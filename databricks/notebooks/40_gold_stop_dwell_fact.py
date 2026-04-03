@@ -208,6 +208,106 @@ joined = joined.withColumn(
 
 # COMMAND ----------
 
+# MAGIC %md ## Step 4b — VP-Based Terminal Arrival Correction
+# MAGIC
+# MAGIC TripUpdate predictions for the **last stop** of a trip are frequently stale:
+# MAGIC the vehicle recovers time mid-route but the feed never revises the terminal
+# MAGIC estimate, resulting in artificially inflated delay values at terminals.
+# MAGIC
+# MAGIC For last stops only (`_rn_desc == 1`), we find the first VP ping within 40m
+# MAGIC of the stop at speed ≤ 1.0 m/s and use that event_ts as the true
+# MAGIC actual_arrival_ts, replacing the TripUpdate prediction when it is earlier.
+
+# COMMAND ----------
+
+# ── Stop locations ─────────────────────────────────────────────────────────────
+stop_locs = (
+    spark.table(SILVER_DIM_STOP)
+    .select(
+        F.col("stop_id"),
+        F.col("lat").alias("stop_lat"),
+        F.col("lon").alias("stop_lon"),
+    )
+)
+
+# ── Low-speed VP pings for this date ──────────────────────────────────────────
+vp = (
+    spark.table(SILVER_FACT_VEHICLE_POSITIONS)
+    .filter(F.col("service_date") == F.lit(target_date).cast("date"))
+    .filter(F.col("speed_mps") <= 1.0)
+    .select("trip_id", "event_ts", "lat", "lon")
+)
+
+# ── Terminal stop rows joined to their stop location ──────────────────────────
+terminal_stops = (
+    joined
+    .filter(F.col("_rn_desc") == 1)
+    .select("trip_id", "stop_id", "scheduled_arrival_ts")
+    .join(stop_locs, on="stop_id", how="left")
+    .filter(F.col("stop_lat").isNotNull())
+)
+
+# ── Spatial join: VP pings within 40m of each terminal stop ───────────────────
+_R = 6371000.0  # Earth radius in metres
+
+terminal_vp = (
+    terminal_stops
+    .join(vp, on="trip_id", how="inner")
+    # Bounding box pre-filter (~40m ≈ 0.00036°, use 0.0005° for safety)
+    .filter(F.abs(F.col("lat") - F.col("stop_lat")) <= 0.0005)
+    .filter(F.abs(F.col("lon") - F.col("stop_lon")) <= 0.0005)
+    # Haversine distance (pure Spark, no UDF)
+    .withColumn("_dlat", F.radians(F.col("lat") - F.col("stop_lat")))
+    .withColumn("_dlon", F.radians(F.col("lon") - F.col("stop_lon")))
+    .withColumn(
+        "_a",
+        F.pow(F.sin(F.col("_dlat") / 2), 2)
+        + F.cos(F.radians(F.col("stop_lat")))
+        * F.cos(F.radians(F.col("lat")))
+        * F.pow(F.sin(F.col("_dlon") / 2), 2),
+    )
+    .withColumn("_dist_m", F.lit(2.0 * _R) * F.asin(F.sqrt(F.col("_a"))))
+    .filter(F.col("_dist_m") <= 40.0)
+    # Earliest VP arrival per trip
+    .groupBy("trip_id")
+    .agg(F.min("event_ts").alias("vp_arrival_ts"))
+)
+
+# ── Patch joined: replace terminal actual_arrival_ts when VP is earlier ────────
+# vp_arrival_ts joins to every row for that trip_id (left join); the _rn_desc
+# guard ensures we only overwrite the last stop row.
+joined = (
+    joined
+    .join(terminal_vp, on="trip_id", how="left")
+    .withColumn(
+        "_use_vp",
+        (F.col("_rn_desc") == 1)
+        & F.col("vp_arrival_ts").isNotNull()
+        & (
+            F.col("actual_arrival_ts").isNull()
+            | (F.unix_timestamp("vp_arrival_ts") < F.unix_timestamp("actual_arrival_ts"))
+        ),
+    )
+    .withColumn(
+        "actual_arrival_ts",
+        F.when(F.col("_use_vp"), F.col("vp_arrival_ts"))
+        .otherwise(F.col("actual_arrival_ts")),
+    )
+    .withColumn(
+        "arrival_delay_seconds",
+        F.when(
+            F.col("_use_vp") & F.col("scheduled_arrival_ts").isNotNull(),
+            (F.unix_timestamp("vp_arrival_ts") - F.unix_timestamp("scheduled_arrival_ts")).cast("int"),
+        ).otherwise(F.col("arrival_delay_seconds")),
+    )
+    .drop("vp_arrival_ts", "_use_vp")
+)
+
+vp_corrections = terminal_vp.count()
+print(f"VP-based terminal corrections applied: {vp_corrections:,} trips")
+
+# COMMAND ----------
+
 # MAGIC %md ## Step 5 — Final Select and Write
 
 # COMMAND ----------
