@@ -40,6 +40,8 @@ interface Props {
   showDirection?: boolean
   activePreset: DatePreset
   onPresetChange: (p: DatePreset) => void
+  // When true, shows a loading spinner in the route dropdown
+  routesLoading?: boolean
   // Optional terminal-stop exclusion toggle (shown when both props provided)
   excludeTerminals?: boolean
   onExcludeTerminalsChange?: (v: boolean) => void
@@ -56,6 +58,7 @@ export default function RouteFilterPanel({
   showDirection = true,
   activePreset,
   onPresetChange,
+  routesLoading = false,
   excludeTerminals,
   onExcludeTerminalsChange,
   scheduleDate,
@@ -105,7 +108,7 @@ export default function RouteFilterPanel({
       {/* Single route selector */}
       {mode === 'single' && (
         <FilterSection label="Route">
-          <SingleRouteDropdown routes={routes} selected={routeId} onSelect={(id) => update({ routeId: id })} />
+          <SingleRouteDropdown routes={routes} selected={routeId} onSelect={(id) => update({ routeId: id })} loading={routesLoading} />
         </FilterSection>
       )}
 
@@ -289,10 +292,12 @@ function SingleRouteDropdown({
   routes,
   selected,
   onSelect,
+  loading = false,
 }: {
   routes: DimRoute[]
   selected: string | null
   onSelect: (id: string | null) => void
+  loading?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -323,9 +328,16 @@ function SingleRouteDropdown({
         <span className={selected ? 'text-white' : 'text-gray-500'}>
           {selectedRoute
             ? `${selectedRoute.route_short_name} — ${selectedRoute.route_long_name}`
-            : 'Select route…'}
+            : loading ? 'Loading routes…' : 'Select route…'}
         </span>
-        <ChevronDown />
+        {loading ? (
+          <svg className="w-4 h-4 text-gray-500 shrink-0 animate-spin" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={3} strokeOpacity={0.25} />
+            <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth={3} strokeLinecap="round" />
+          </svg>
+        ) : (
+          <ChevronDown />
+        )}
       </button>
 
       {open && (
@@ -341,27 +353,39 @@ function SingleRouteDropdown({
             />
           </div>
           <div className="overflow-y-auto flex-1">
-            {selected && (
-              <button
-                onClick={() => { onSelect(null); setOpen(false) }}
-                className="w-full text-left px-3 py-2 text-xs text-violet-400 hover:bg-gray-700 border-b border-gray-700"
-              >
-                Clear selection
-              </button>
-            )}
-            {filtered.map((r) => (
-              <button
-                key={r.route_id}
-                onClick={() => { onSelect(r.route_id); setOpen(false) }}
-                className={cn(
-                  'w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gray-700 transition-colors',
-                  selected === r.route_id ? 'text-white bg-gray-700/50' : 'text-gray-300'
+            {loading ? (
+              <div className="flex flex-col items-center justify-center py-6 gap-2">
+                <svg className="w-5 h-5 text-violet-400 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={3} strokeOpacity={0.25} />
+                  <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth={3} strokeLinecap="round" />
+                </svg>
+                <p className="text-gray-500 text-xs">Fetching routes…</p>
+              </div>
+            ) : (
+              <>
+                {selected && (
+                  <button
+                    onClick={() => { onSelect(null); setOpen(false) }}
+                    className="w-full text-left px-3 py-2 text-xs text-violet-400 hover:bg-gray-700 border-b border-gray-700"
+                  >
+                    Clear selection
+                  </button>
                 )}
-              >
-                <span className="font-medium shrink-0 w-10">{r.route_short_name}</span>
-                <span className="text-gray-500 text-xs truncate">{r.route_long_name}</span>
-              </button>
-            ))}
+                {filtered.map((r) => (
+                  <button
+                    key={r.route_id}
+                    onClick={() => { onSelect(r.route_id); setOpen(false) }}
+                    className={cn(
+                      'w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-gray-700 transition-colors',
+                      selected === r.route_id ? 'text-white bg-gray-700/50' : 'text-gray-300'
+                    )}
+                  >
+                    <span className="font-medium shrink-0 w-10">{r.route_short_name}</span>
+                    <span className="text-gray-500 text-xs truncate">{r.route_long_name}</span>
+                  </button>
+                ))}
+              </>
+            )}
           </div>
         </div>
       )}

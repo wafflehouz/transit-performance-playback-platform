@@ -125,6 +125,7 @@ export default function PlaybackPageClient() {
   const [preset, setPreset] = useState<DatePreset>('1d')
 
   const [routes, setRoutes] = useState<DimRoute[]>([])
+  const [routesLoading, setRoutesLoading] = useState(true)
   const [tripList, setTripList] = useState<TripListRow[]>([])
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null)
   const [pathPoints, setPathPoints] = useState<PlaybackPoint[]>([])
@@ -158,7 +159,10 @@ export default function PlaybackPageClient() {
 
   // ── Load routes once ───────────────────────────────────────────────────────
   useEffect(() => {
-    fetchJson(ROUTES_WITH_DATA_SQL).then(setRoutes).catch(() => {})
+    fetchJson(ROUTES_WITH_DATA_SQL)
+      .then(setRoutes)
+      .catch(() => {})
+      .finally(() => setRoutesLoading(false))
   }, [])
 
   // ── Load trip list when route/date changes ─────────────────────────────────
@@ -367,11 +371,12 @@ export default function PlaybackPageClient() {
         showDirection={false}
         activePreset={preset}
         onPresetChange={setPreset}
+        routesLoading={routesLoading}
         scheduleDate={serviceDate}
         onScheduleDateChange={(d) => setServiceDate(d)}
       />
     )
-  }, [filters, routes, preset, serviceDate]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filters, routes, preset, serviceDate, routesLoading]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Trip selector helpers ──────────────────────────────────────────────────
   function dirLabel(id: number | null): string {
