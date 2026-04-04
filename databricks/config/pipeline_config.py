@@ -97,6 +97,7 @@ GOLD_TRIP_PATH_FACT           = tbl("gold_trip_path_fact")
 GOLD_ROUTE_METRICS_15MIN      = tbl("gold_route_metrics_15min")
 GOLD_ROUTE_METRICS_BASELINE   = tbl("gold_route_metrics_baseline")
 GOLD_ROUTE_SEGMENT_CONGESTION = tbl("gold_route_segment_congestion")
+GOLD_RAIL_STOP_ACTUALS        = tbl("gold_rail_stop_actuals")
 GOLD_ANOMALY_EVENTS           = tbl("gold_anomaly_events")
 GOLD_INCIDENT_REPORTS         = tbl("gold_incident_reports")
 GOLD_STOP_DWELL_INFERRED      = tbl("gold_stop_dwell_inferred")
@@ -114,6 +115,12 @@ POLL_INTERVAL_SECONDS       = 60    # target cadence for pollers
 VP_DOWNSAMPLE_SECONDS       = 30    # keep at most 1 VP row per vehicle per this window
 VP_STOP_RADIUS_METERS       = 40    # haversine radius to match VP point to a stop
 VP_STATIONARY_THRESHOLD_MPS = 1.0   # speed below this = vehicle considered stationary
+
+# Rail route IDs (route_type 0/1 in Valley Metro GTFS).
+# Source: Swiftly Route Groups — "Valley Metro Rail" group (05_seed_route_groups.py).
+# "S" = Tempe Streetcar (low priority — include but expect sparse data).
+# Gold 48 filters to these routes for VP stop-sequence transition actuals.
+RAIL_ROUTE_IDS = ["A", "B", "S"]
 
 print(f"Config loaded — catalog={CATALOG}, schema={SCHEMA}")
 print(f"Base path: {BASE_PATH}")
