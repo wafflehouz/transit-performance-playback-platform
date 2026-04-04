@@ -8,7 +8,7 @@
 # MAGIC **Schedule:** Nightly, after Silver 31 (VP) completes — runs alongside Gold 40-47
 # MAGIC **Dependencies:** `silver_fact_vehicle_positions`, `silver_fact_stop_schedule`
 # MAGIC **Grain:** `(service_date, trip_id, stop_sequence)`
-# MAGIC **Routes:** Rail only — `RAIL_ROUTE_IDS` (A, B, S)
+# MAGIC **Routes:** `RAIL_ROUTE_IDS` (A, B) — Tempe Streetcar (S) excluded; see note below
 # MAGIC
 # MAGIC ## Why This Notebook Exists
 # MAGIC
@@ -39,10 +39,13 @@
 # MAGIC route B, 11,365 rows). STOPPED_AT/IN_TRANSIT_TO transitions are unavailable.
 # MAGIC Sequence transitions are the only usable signal.
 # MAGIC
-# MAGIC ## Tempe Streetcar ("S")
+# MAGIC ## Tempe Streetcar ("S") — Excluded
 # MAGIC
-# MAGIC Included in `RAIL_ROUTE_IDS` for completeness. If no VP data exists for "S",
-# MAGIC the notebook exits cleanly after Step 1's route filter returns 0 rows.
+# MAGIC Route S reuses the same `trip_id` across multiple headway runs per day.
+# MAGIC The first-VP-ping signal breaks because an early run's arrival gets matched
+# MAGIC against a later run's scheduled time, producing multi-hour positive outliers.
+# MAGIC S is grouped with bus routes in Gold 40 (TripUpdates-based) and mirrors
+# MAGIC how Swiftly groups S on the frontend.
 
 # COMMAND ----------
 
@@ -156,13 +159,28 @@ joined = first_ping.join(schedule, on=["trip_id", "stop_sequence"], how="left")
 # MAGIC %md ## Step 4 — Compute Scheduled Arrival Timestamp and Delay
 # MAGIC
 # MAGIC GTFS schedule times are seconds-since-midnight in Phoenix local time
-# MAGIC (America/Phoenix = UTC-7, no DST). Same anchor logic as Gold 40.
+# MAGIC (America/Phoenix = UTC-7, no DST).
+# MAGIC
+# MAGIC **Midnight-crossing anchor fix:**
+# MAGIC When `scheduled_arrival_secs > 86400`, the GTFS trip is listed under the
+# MAGIC previous service day (e.g., a 1 AM run listed under 2026-04-02 as 25:00:00).
+# MAGIC The VP `service_date` for those pings is the physical date (2026-04-03),
+# MAGIC one day ahead of the GTFS service_date. Anchoring to VP service_date + 90000s
+# MAGIC produces a ~-86400s delay. Fix: use `service_date - 1 day` as the anchor
+# MAGIC whenever `scheduled_arrival_secs > 86400`.
 
 # COMMAND ----------
 
+# Anchor date: subtract 1 day for stops that cross midnight (GTFS >24:00 times).
+# For all other stops, anchor to the VP service_date as usual.
+anchor_date = F.when(
+    F.col("scheduled_arrival_secs") > 86400,
+    F.date_sub(F.col("service_date"), 1)
+).otherwise(F.col("service_date"))
+
 phoenix_midnight_unix = F.unix_timestamp(
     F.to_utc_timestamp(
-        F.to_timestamp(F.col("service_date").cast("string"), "yyyy-MM-dd"),
+        F.to_timestamp(anchor_date.cast("string"), "yyyy-MM-dd"),
         "America/Phoenix"
     )
 )

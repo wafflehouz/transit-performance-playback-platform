@@ -116,11 +116,11 @@ VP_DOWNSAMPLE_SECONDS       = 30    # keep at most 1 VP row per vehicle per this
 VP_STOP_RADIUS_METERS       = 40    # haversine radius to match VP point to a stop
 VP_STATIONARY_THRESHOLD_MPS = 1.0   # speed below this = vehicle considered stationary
 
-# Rail route IDs (route_type 0/1 in Valley Metro GTFS).
-# Source: Swiftly Route Groups — "Valley Metro Rail" group (05_seed_route_groups.py).
-# "S" = Tempe Streetcar (low priority — include but expect sparse data).
-# Gold 48 filters to these routes for VP stop-sequence transition actuals.
-RAIL_ROUTE_IDS = ["A", "B", "S"]
+# Rail route IDs processed by Gold 48 (VP stop-sequence transition actuals).
+# A = Valley Metro Rail (East/West line), B = Valley Metro Rail (METRO line).
+# S (Tempe Streetcar) is excluded — trip_id reused across daily runs breaks
+# the first-VP-ping signal; S is grouped with bus routes in Gold 40 / Swiftly.
+RAIL_ROUTE_IDS = ["A", "B"]
 
 print(f"Config loaded — catalog={CATALOG}, schema={SCHEMA}")
 print(f"Base path: {BASE_PATH}")
