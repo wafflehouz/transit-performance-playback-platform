@@ -308,6 +308,90 @@ print(f"VP-based terminal corrections applied: {vp_corrections:,} trips")
 
 # COMMAND ----------
 
+# MAGIC %md ### Step 4b (ii) — Penultimate Propagation Fallback
+# MAGIC
+# MAGIC When no VP ping exists near the terminal (GPS blackout), VP correction cannot
+# MAGIC fire. If the terminal delay is >300s worse than the penultimate stop, we derive
+# MAGIC the terminal arrival by propagating penultimate timing through the scheduled
+# MAGIC segment:
+# MAGIC
+# MAGIC `estimated_arrival = penult_actual_ts + (terminal_sched_ts - penult_sched_ts)`
+# MAGIC
+# MAGIC This preserves the real delay carried into the final segment while eliminating
+# MAGIC the stale TripUpdate inflation.
+
+# COMMAND ----------
+
+penultimate = (
+    joined
+    .filter(F.col("_rn_desc") == 2)
+    .select(
+        "trip_id",
+        F.col("actual_arrival_ts").alias("penult_actual_ts"),
+        F.col("scheduled_arrival_ts").alias("penult_sched_ts"),
+        F.col("arrival_delay_seconds").alias("penult_delay_seconds"),
+    )
+    .filter(F.col("penult_actual_ts").isNotNull())
+)
+
+terminal_rows = (
+    joined
+    .filter(F.col("_rn_desc") == 1)
+    .select(
+        "trip_id",
+        F.col("actual_arrival_ts").alias("term_actual_ts"),
+        F.col("scheduled_arrival_ts").alias("term_sched_ts"),
+        F.col("arrival_delay_seconds").alias("term_delay_seconds"),
+    )
+)
+
+penult_fallback = (
+    terminal_rows
+    .join(penultimate, on="trip_id", how="inner")
+    .withColumn(
+        "estimated_arrival_ts",
+        F.to_timestamp(
+            F.unix_timestamp("penult_actual_ts")
+            + F.unix_timestamp("term_sched_ts")
+            - F.unix_timestamp("penult_sched_ts")
+        )
+    )
+    # Apply only when: estimate is earlier than current TU value AND delay jump >300s
+    .filter(
+        F.col("term_actual_ts").isNotNull()
+        & (F.unix_timestamp("estimated_arrival_ts") < F.unix_timestamp("term_actual_ts"))
+        & (F.col("term_delay_seconds") - F.col("penult_delay_seconds") > 300)
+    )
+    .select("trip_id", "estimated_arrival_ts")
+)
+
+joined = (
+    joined
+    .join(penult_fallback, on="trip_id", how="left")
+    .withColumn(
+        "_use_penult",
+        (F.col("_rn_desc") == 1) & F.col("estimated_arrival_ts").isNotNull()
+    )
+    .withColumn(
+        "actual_arrival_ts",
+        F.when(F.col("_use_penult"), F.col("estimated_arrival_ts"))
+        .otherwise(F.col("actual_arrival_ts"))
+    )
+    .withColumn(
+        "arrival_delay_seconds",
+        F.when(
+            F.col("_use_penult") & F.col("scheduled_arrival_ts").isNotNull(),
+            (F.unix_timestamp("estimated_arrival_ts") - F.unix_timestamp("scheduled_arrival_ts")).cast("int"),
+        ).otherwise(F.col("arrival_delay_seconds"))
+    )
+    .drop("estimated_arrival_ts", "_use_penult")
+)
+
+penult_corrections = penult_fallback.count()
+print(f"Penultimate-propagation fallback corrections: {penult_corrections:,} trips")
+
+# COMMAND ----------
+
 # MAGIC %md ## Step 5 — Final Select and Write
 
 # COMMAND ----------
