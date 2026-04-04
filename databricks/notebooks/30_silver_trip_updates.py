@@ -73,7 +73,9 @@ if bronze_count == 0:
 # COMMAND ----------
 
 # Window for lag() — ordered by feed_ts ascending within each trip+stop
-w_asc = Window.partitionBy("trip_id", "stop_sequence").orderBy("feed_ts")
+w_asc   = Window.partitionBy("trip_id", "stop_sequence").orderBy("feed_ts")
+w_final = Window.partitionBy("trip_id", "stop_sequence").orderBy(F.desc("feed_ts"))
+w_part  = Window.partitionBy("trip_id", "stop_sequence")
 
 # Step 1: detect state changes
 deduped = (
@@ -86,15 +88,41 @@ deduped = (
     .drop("prev_hash")
 )
 
-# Step 2: mark is_final on the now-filtered state-change rows
-# (last state change = last meaningful prediction for that stop)
-w_final = Window.partitionBy("trip_id", "stop_sequence").orderBy(F.desc("feed_ts"))
+# Step 2: mark is_final and is_first_past on the deduplicated rows.
+#
+# is_final      — last state-change row per (trip, stop).  For bus feeds this is
+#                 the last prediction before the stop drops out of the feed, which
+#                 is ~when the vehicle passed.  Used as the fallback in Gold.
+#
+# is_first_past — earliest state-change row where feed_ts >= arrival_ts, i.e. the
+#                 moment the predicted arrival first became a past event.  For bus
+#                 this fires at the instant of passing.  For rail feeds that
+#                 retroactively revise all historical stops as trip-wide delay
+#                 grows, this fires when the train actually passed the stop — long
+#                 before the stale end-of-trip prediction inflates is_final.
+#                 Gold 40 prefers is_first_past over is_final when available.
 
 silver_df = (
     deduped
-    .withColumn("rn_desc", F.row_number().over(w_final))
-    .withColumn("is_final", F.col("rn_desc") == 1)
-    .drop("rn_desc")
+    .withColumn("_rn_asc",  F.row_number().over(w_asc))
+    .withColumn("_rn_desc", F.row_number().over(w_final))
+    .withColumn("is_final", F.col("_rn_desc") == 1)
+    # Among state-change rows where arrival is in the past, find the earliest
+    .withColumn(
+        "_min_past_rn",
+        F.min(
+            F.when(
+                F.col("arrival_ts").isNotNull()
+                & (F.unix_timestamp("feed_ts") >= F.unix_timestamp("arrival_ts")),
+                F.col("_rn_asc"),
+            )
+        ).over(w_part)
+    )
+    .withColumn(
+        "is_first_past",
+        F.col("_min_past_rn").isNotNull() & (F.col("_rn_asc") == F.col("_min_past_rn"))
+    )
+    .drop("_rn_asc", "_rn_desc", "_min_past_rn")
 )
 
 # COMMAND ----------
@@ -119,6 +147,7 @@ silver_out = silver_df.select(
     "departure_ts",
     "trip_schedule_relationship",
     "is_final",
+    "is_first_past",
     "event_hash",
     "ingest_ts",                      # kept for feed latency auditing
 )
@@ -146,6 +175,7 @@ spark.sql(f"""
         departure_ts                 TIMESTAMP,
         trip_schedule_relationship   STRING,
         is_final                     BOOLEAN,
+        is_first_past                BOOLEAN,
         event_hash                   STRING,
         ingest_ts                    TIMESTAMP
     )
@@ -163,7 +193,7 @@ spark.sql(f"""
     .format("delta")
     .mode("overwrite")
     .option("replaceWhere", f"service_date = '{target_date}'")
-    .option("overwriteSchema", "false")
+    .option("mergeSchema", "true")
     .saveAsTable(SILVER_FACT_TRIP_UPDATES)
 )
 
@@ -180,11 +210,12 @@ written = (
     .filter(F.col("service_date") == F.lit(target_date).cast("date"))
 )
 
-silver_count   = written.count()
-is_final_cnt   = written.filter(F.col("is_final")).count()
-distinct_trips = written.select("trip_id").distinct().count()
-distinct_pairs = written.select("trip_id", "stop_sequence").distinct().count()
-reduction_pct  = (bronze_count - silver_count) / bronze_count * 100
+silver_count      = written.count()
+is_final_cnt      = written.filter(F.col("is_final")).count()
+is_first_past_cnt = written.filter(F.col("is_first_past")).count()
+distinct_trips    = written.select("trip_id").distinct().count()
+distinct_pairs    = written.select("trip_id", "stop_sequence").distinct().count()
+reduction_pct     = (bronze_count - silver_count) / bronze_count * 100
 
 print(f"""
 === Silver Trip Updates: {target_date} ===
@@ -192,10 +223,12 @@ print(f"""
   Silver rows out         : {silver_count:>10,}
   Reduction               : {reduction_pct:>9.1f}%
   is_final rows           : {is_final_cnt:>10,}
+  is_first_past rows      : {is_first_past_cnt:>10,}
   Distinct trips          : {distinct_trips:>10,}
   Distinct (trip, stop)   : {distinct_pairs:>10,}
 
-  is_final == distinct pairs: {'✓ OK' if is_final_cnt == distinct_pairs else '✗ MISMATCH — investigate'}
+  is_final == distinct pairs    : {'✓ OK' if is_final_cnt == distinct_pairs else '✗ MISMATCH — investigate'}
+  is_first_past coverage        : {is_first_past_cnt / distinct_pairs * 100:.1f}% of (trip, stop) pairs
 """)
 
 print("Delay distribution (is_final rows, seconds):")

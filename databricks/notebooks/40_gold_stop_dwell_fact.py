@@ -46,10 +46,34 @@ print(f"Processing service_date = {target_date}")
 
 # COMMAND ----------
 
+# Prefer is_first_past over is_final where available.
+# is_first_past = earliest snapshot where feed_ts >= arrival_ts (stop has been passed).
+# For bus feeds this is equivalent to is_final (feed drops the stop once passed).
+# For rail feeds that retroactively inflate all stop delays as the trip-wide delay
+# grows, is_first_past captures the actual passing moment before the inflation occurs.
+# Guard: fall back to is_final for Silver partitions written before is_first_past existed.
+_silver = spark.table(SILVER_FACT_TRIP_UPDATES).filter(
+    F.col("service_date") == F.lit(target_date).cast("date")
+)
+_has_first_past = "is_first_past" in _silver.columns
+
+if _has_first_past:
+    _w_pref = Window.partitionBy("trip_id", "stop_sequence").orderBy(
+        F.when(F.col("is_first_past"), F.lit(1)).otherwise(F.lit(2)),
+        "feed_ts",
+    )
+    _candidates = (
+        _silver
+        .filter(F.col("is_first_past") | F.col("is_final"))
+        .withColumn("_rn", F.row_number().over(_w_pref))
+        .filter(F.col("_rn") == 1)
+        .drop("_rn")
+    )
+else:
+    _candidates = _silver.filter(F.col("is_final") == True)
+
 final_tu = (
-    spark.table(SILVER_FACT_TRIP_UPDATES)
-    .filter(F.col("service_date") == F.lit(target_date).cast("date"))
-    .filter(F.col("is_final") == True)
+    _candidates
     .select(
         "service_date",
         "trip_id",
