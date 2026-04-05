@@ -196,6 +196,10 @@ export function getVehiclesForRoutes(routeIds: string[]): VehiclePosition[] {
   return state.vehicles.filter((v) => v.route_id !== null && set.has(v.route_id!))
 }
 
+export function getAllVehicles(): VehiclePosition[] {
+  return state.vehicles.slice()
+}
+
 export function getCacheStatus() {
   return {
     vehicle_count: state.vehicles.length,

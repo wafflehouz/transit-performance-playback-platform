@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express'
-import { getVehiclesForRoute, getVehiclesForRoutes, getCacheStatus, getActiveRouteIds } from '../cache'
+import { getVehiclesForRoute, getVehiclesForRoutes, getAllVehicles, getCacheStatus, getActiveRouteIds } from '../cache'
 
 const router = Router()
 
@@ -59,6 +59,26 @@ router.get('/multi', (req: Request, res: Response) => {
     vehicle_count: vehicles.length,
     fetched_at: status.fetched_at,
     fetched_at_ms: status.fetched_at_ms,
+    vehicles,
+  })
+})
+
+/**
+ * GET /vehicles/all
+ * Returns all vehicles currently in the cache regardless of route.
+ */
+router.get('/all', (_req: Request, res: Response) => {
+  const status = getCacheStatus()
+  if (status.error && status.vehicle_count === 0) {
+    res.status(503).json({ error: `Feed unavailable: ${status.error}` })
+    return
+  }
+  const vehicles = getAllVehicles()
+  res.json({
+    vehicle_count: vehicles.length,
+    fetched_at: status.fetched_at,
+    fetched_at_ms: status.fetched_at_ms,
+    feed_ts: status.feed_ts,
     vehicles,
   })
 })

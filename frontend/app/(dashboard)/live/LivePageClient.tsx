@@ -5,9 +5,12 @@ import { useFilterPanel } from '@/lib/filter-panel-context'
 import { FilterSection } from '@/components/ui/FilterControls'
 import LiveMap, { type LiveVehicle, type OtpStatus } from '@/components/map/LiveMap'
 import type { DimRoute, RouteStop } from '@/types'
+import { cn } from '@/lib/utils'
 
 const RENDER_API = process.env.NEXT_PUBLIC_RENDER_API_URL ?? 'http://localhost:3001'
 const REFRESH_MS = 30_000
+
+type LiveScope = 'all' | 'group' | 'single'
 
 // Valley Metro display colors
 const VM_NAME_COLORS: Record<string, string> = {
@@ -33,7 +36,6 @@ function getCuratedColor(routeType: number, routeShortName?: string): string {
 }
 
 interface FeedResponse {
-  route_ids: string[]
   vehicle_count: number
   fetched_at: string | null
   fetched_at_ms: number | null
@@ -69,6 +71,9 @@ export default function LivePageClient() {
   const setContentRef = useRef(setContent)
   setContentRef.current = setContent
 
+  // ── Scope ─────────────────────────────────────────────────────────────────
+  const [scope, setScope] = useState<LiveScope>('all')
+
   // ── Routes metadata (from Render + Databricks) ────────────────────────────
   const [routeIds, setRouteIds]             = useState<string[]>([])
   const [routeNames, setRouteNames]         = useState<Map<string, string>>(new Map())
@@ -83,7 +88,7 @@ export default function LivePageClient() {
   const [groupRouteIds, setGroupRouteIds]       = useState<string[]>([])
   const [groupRoutesLoading, setGroupRoutesLoading] = useState(false)
 
-  // Single-route drill-down within group (enables stop dot layer)
+  // ── Single-route selection ────────────────────────────────────────────────
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null)
 
   // ── Selected vehicle ──────────────────────────────────────────────────────
@@ -95,7 +100,7 @@ export default function LivePageClient() {
   const [error, setError] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // ── Route stops: shapes (always) + stop dots (single-route only) ──────────
+  // ── Route stops: shapes (group/single) + stop dots (single only) ──────────
   const [shapePoints, setShapePoints] = useState<Array<RouteStop & { route_id?: string }>>([])
   const [stopPoints, setStopPoints]   = useState<RouteStop[]>([])
 
@@ -103,6 +108,21 @@ export default function LivePageClient() {
     ...shapePoints.map((r) => ({ ...r, point_type: 'shape' as const })),
     ...stopPoints.map((r)  => ({ ...r, point_type: 'stop'  as const })),
   ], [shapePoints, stopPoints])
+
+  // ── Route IDs driving shapes: group routes OR single selected route ────────
+  const shapeRouteIds = useMemo(() => {
+    if (scope === 'group') return groupRouteIds
+    if (scope === 'single' && selectedRouteId) return [selectedRouteId]
+    return []
+  }, [scope, groupRouteIds, selectedRouteId])
+
+  // ── Route IDs to fetch vehicles for ───────────────────────────────────────
+  // (all scope uses /vehicles/all endpoint directly, handled in fetchVehicles)
+  const activeRouteIds = useMemo(() => {
+    if (scope === 'group') return groupRouteIds
+    if (scope === 'single') return selectedRouteId ? [selectedRouteId] : []
+    return []
+  }, [scope, groupRouteIds, selectedRouteId])
 
   // ── Derived DimRoute list (for display names) ─────────────────────────────
   const routes = useMemo<DimRoute[]>(
@@ -119,15 +139,14 @@ export default function LivePageClient() {
     [routeIds, routeNames, routeTypes]
   )
 
-  // ── Route colors map: one color per route in the group ────────────────────
+  // ── Route colors map ──────────────────────────────────────────────────────
   const routeColors = useMemo(() => {
     const map = new Map<string, string>()
-    for (const id of groupRouteIds) {
-      const route = routes.find((r) => r.route_id === id)
-      map.set(id, getCuratedColor(routeTypes.get(id) ?? 3, route?.route_short_name ?? id))
+    for (const id of shapeRouteIds) {
+      map.set(id, getCuratedColor(routeTypes.get(id) ?? 3, id))
     }
     return map
-  }, [groupRouteIds, routes, routeTypes])
+  }, [shapeRouteIds, routeTypes])
 
   // ── Step 1: fetch active route IDs + group names on mount ─────────────────
   useEffect(() => {
@@ -184,7 +203,7 @@ export default function LivePageClient() {
 
   // ── Fetch route IDs for selected group ────────────────────────────────────
   useEffect(() => {
-    if (!selectedGroupName) { setGroupRouteIds([]); setSelectedRouteId(null); return }
+    if (!selectedGroupName) { setGroupRouteIds([]); return }
     setGroupRoutesLoading(true)
     const safe = selectedGroupName.replace(/'/g, "''")
     fetch('/api/databricks/query', {
@@ -209,10 +228,10 @@ export default function LivePageClient() {
     }).catch(() => {})
   }, [])
 
-  // ── Shapes: load for all routes in the selected group ────────────────────
+  // ── Shapes: load for the active shape route IDs ───────────────────────────
   useEffect(() => {
-    if (!groupRouteIds.length) { setShapePoints([]); return }
-    const ids = groupRouteIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(',')
+    if (!shapeRouteIds.length) { setShapePoints([]); return }
+    const ids = shapeRouteIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(',')
     fetch('/api/databricks/query', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -245,11 +264,11 @@ export default function LivePageClient() {
         setShapePoints(d.rows ?? [])
       )
       .catch(() => setShapePoints([]))
-  }, [groupRouteIds])
+  }, [shapeRouteIds])
 
-  // ── Stop dots: only loaded when a single route is drilled into ────────────
+  // ── Stop dots: only in single-route scope ─────────────────────────────────
   useEffect(() => {
-    if (!selectedRouteId) { setStopPoints([]); return }
+    if (scope !== 'single' || !selectedRouteId) { setStopPoints([]); return }
     const sid = selectedRouteId.replace(/'/g, "''")
     fetch('/api/databricks/query', {
       method:  'POST',
@@ -280,13 +299,19 @@ export default function LivePageClient() {
       .then((r) => r.json())
       .then((d: { rows?: RouteStop[] }) => setStopPoints(d.rows ?? []))
       .catch(() => setStopPoints([]))
-  }, [selectedRouteId])
+  }, [scope, selectedRouteId])
 
-  // ── Fetch vehicles (multi-route) ──────────────────────────────────────────
-  const fetchVehicles = useCallback(async (ids: string[]) => {
-    if (!ids.length) return
+  // ── Fetch vehicles ────────────────────────────────────────────────────────
+  const fetchVehicles = useCallback(async (currentScope: LiveScope, ids: string[]) => {
     try {
-      const res = await fetch(`${RENDER_API}/vehicles/multi?route_ids=${ids.join(',')}`)
+      let url: string
+      if (currentScope === 'all') {
+        url = `${RENDER_API}/vehicles/all`
+      } else {
+        if (!ids.length) return
+        url = `${RENDER_API}/vehicles/multi?route_ids=${ids.join(',')}`
+      }
+      const res = await fetch(url)
       if (!res.ok) throw new Error(`Feed error: ${res.status}`)
       const data: FeedResponse = await res.json()
       setFeed(data)
@@ -296,16 +321,16 @@ export default function LivePageClient() {
     }
   }, [])
 
-  // Start / restart polling when group changes
+  // Start / restart polling when scope or active IDs change
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current)
     setFeed(null)
     setSelectedVehicleId(null)
-    if (!groupRouteIds.length) return
-    fetchVehicles(groupRouteIds)
-    timerRef.current = setInterval(() => fetchVehicles(groupRouteIds), REFRESH_MS)
+    if (scope !== 'all' && !activeRouteIds.length) return
+    fetchVehicles(scope, activeRouteIds)
+    timerRef.current = setInterval(() => fetchVehicles(scope, activeRouteIds), REFRESH_MS)
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
-  }, [groupRouteIds, fetchVehicles])
+  }, [scope, activeRouteIds, fetchVehicles])
 
   // ── Trip start time for selected vehicle ──────────────────────────────────
   useEffect(() => {
@@ -334,6 +359,14 @@ export default function LivePageClient() {
       .catch(() => setTripStartTs(null))
   }, [selectedVehicleId, feed?.vehicles])
 
+  // ── Scope change handler ──────────────────────────────────────────────────
+  function handleScopeChange(s: LiveScope) {
+    setScope(s)
+    if (s !== 'group') setSelectedGroupName(null)
+    if (s !== 'single') setSelectedRouteId(null)
+    setSelectedVehicleId(null)
+  }
+
   // ── Derived counts ────────────────────────────────────────────────────────
   const otpCounts = feed?.vehicles.reduce(
     (acc, v) => { acc[v.otp_status] = (acc[v.otp_status] ?? 0) + 1; return acc },
@@ -341,6 +374,21 @@ export default function LivePageClient() {
   ) ?? {}
 
   const selectedVehicle = feed?.vehicles.find((v) => v.vehicle_id === selectedVehicleId) ?? null
+
+  // ── Stats overlay label ───────────────────────────────────────────────────
+  const statsLabel = useMemo(() => {
+    if (scope === 'all') return 'All Routes'
+    if (scope === 'group') return selectedGroupName ?? null
+    if (scope === 'single' && selectedRouteId) {
+      return routeNames.get(selectedRouteId) ?? `Route ${selectedRouteId}`
+    }
+    return null
+  }, [scope, selectedGroupName, selectedRouteId, routeNames])
+
+  // ── Show empty state when a selection is required but not made ────────────
+  const needsSelection =
+    (scope === 'group' && !selectedGroupName) ||
+    (scope === 'single' && !selectedRouteId)
 
   // ── Inject filter panel ───────────────────────────────────────────────────
   useEffect(() => {
@@ -354,30 +402,34 @@ export default function LivePageClient() {
       )
     } else {
       setContentRef.current(
-        <LiveGroupFilters
+        <LiveFilterPanel
+          scope={scope}
+          onScopeChange={handleScopeChange}
           groups={groups}
           groupsLoading={groupsLoading}
           selectedGroupName={selectedGroupName}
-          onSelectGroup={(name) => { setSelectedGroupName(name); setSelectedRouteId(null) }}
-          groupRouteIds={groupRouteIds}
+          onSelectGroup={(name) => { setSelectedGroupName(name) }}
           groupRoutesLoading={groupRoutesLoading}
+          routeIds={routeIds}
           routeNames={routeNames}
           routeNamesLoading={routeNamesLoading}
+          routesLoading={routesLoading}
           selectedRouteId={selectedRouteId}
           onSelectRoute={setSelectedRouteId}
         />
       )
     }
   }, [
-    groups, groupsLoading, selectedGroupName, groupRouteIds, groupRoutesLoading,
-    routeNames, routeNamesLoading, selectedRouteId, selectedVehicle, tripStartTs,
+    scope, groups, groupsLoading, selectedGroupName, groupRoutesLoading,
+    routeIds, routeNames, routeNamesLoading, routesLoading,
+    selectedRouteId, selectedVehicle, tripStartTs,
   ])
 
   return (
     <div className="flex flex-col h-full relative">
 
-      {/* Empty state */}
-      {!selectedGroupName && (
+      {/* Empty state — only when a selection is required */}
+      {needsSelection && (
         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
           <div className="bg-gray-900/90 border border-gray-700 rounded-2xl px-8 py-6 text-center backdrop-blur-sm shadow-2xl">
             <div className="w-12 h-12 rounded-full bg-blue-500/10 flex items-center justify-center mx-auto mb-3">
@@ -386,34 +438,27 @@ export default function LivePageClient() {
                 <path strokeLinecap="round" d="M6.3 6.3a8 8 0 000 11.4M17.7 6.3a8 8 0 010 11.4" />
               </svg>
             </div>
-            <p className="text-white font-semibold mb-1">Select a route group to begin</p>
+            <p className="text-white font-semibold mb-1">
+              {scope === 'group' ? 'Select a route group to begin' : 'Select a route to begin'}
+            </p>
             <p className="text-gray-400 text-sm">Use the Filters panel on the left</p>
           </div>
         </div>
       )}
 
       {/* Stats overlay */}
-      {feed && selectedGroupName && (
+      {feed && statsLabel && (
         <div className="absolute top-4 right-4 z-10 bg-gray-900/95 border border-gray-700 rounded-xl shadow-2xl p-4 w-64 backdrop-blur-sm">
           <div className="flex items-center justify-between mb-0.5">
-            <span className="text-white font-semibold text-sm truncate pr-2">
-              {selectedGroupName}
-            </span>
+            <span className="text-white font-semibold text-sm truncate pr-2">{statsLabel}</span>
             <span className="flex items-center gap-1.5 shrink-0">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               <span className="text-emerald-400 text-xs">Live</span>
             </span>
           </div>
-          {selectedRouteId && (
-            <p className="text-gray-500 text-xs mb-2 truncate">
-              {routeNames.get(selectedRouteId) ?? `Route ${selectedRouteId}`}
-            </p>
-          )}
-          {!selectedRouteId && (
-            <p className="text-gray-600 text-xs mb-2">
-              {feed.vehicle_count} vehicle{feed.vehicle_count !== 1 ? 's' : ''}
-            </p>
-          )}
+          <p className="text-gray-600 text-xs mb-2">
+            {feed.vehicle_count} vehicle{feed.vehicle_count !== 1 ? 's' : ''}
+          </p>
 
           <div className="space-y-1.5">
             {([
@@ -464,12 +509,11 @@ function VehicleDetailPanel({ vehicle, tripStartTs, onBack }: {
 }) {
   const color = OTP_COLOR[vehicle.otp_status]
   const speedMph = vehicle.speed_mps != null ? (vehicle.speed_mps * 2.237).toFixed(0) : null
-  const startLabel = tripStartTs ?? '…'
 
   const rows: [string, string][] = [
     ['Route', vehicle.route_id  ?? '—'],
     ['To',    vehicle.headsign  ?? '—'],
-    ['Start', startLabel],
+    ['Start', tripStartTs ?? '…'],
     ['Speed', speedMph ? `${speedMph} mph` : '—'],
   ]
 
@@ -482,7 +526,7 @@ function VehicleDetailPanel({ vehicle, tripStartTs, onBack }: {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
           <path strokeLinecap="round" d="M19 12H5M12 5l-7 7 7 7" />
         </svg>
-        Back to group filter
+        Back to filters
       </button>
 
       <div>
@@ -524,45 +568,74 @@ function VehicleDetailPanel({ vehicle, tripStartTs, onBack }: {
   )
 }
 
-// ── Group + route filter panel ────────────────────────────────────────────────
+// ── Filter panel ──────────────────────────────────────────────────────────────
 
-function LiveGroupFilters({
+function LiveFilterPanel({
+  scope, onScopeChange,
   groups, groupsLoading, selectedGroupName, onSelectGroup,
-  groupRouteIds, groupRoutesLoading, routeNames, routeNamesLoading,
+  groupRoutesLoading,
+  routeIds, routeNames, routeNamesLoading, routesLoading,
   selectedRouteId, onSelectRoute,
 }: {
+  scope: LiveScope
+  onScopeChange: (s: LiveScope) => void
   groups: string[]
   groupsLoading: boolean
   selectedGroupName: string | null
   onSelectGroup: (name: string | null) => void
-  groupRouteIds: string[]
   groupRoutesLoading: boolean
+  routeIds: string[]
   routeNames: Map<string, string>
   routeNamesLoading: boolean
+  routesLoading: boolean
   selectedRouteId: string | null
   onSelectRoute: (id: string | null) => void
 }) {
+  const modeLabels: Record<LiveScope, string> = {
+    all:    'All Routes',
+    group:  'Route Group',
+    single: 'Single Route',
+  }
+
   return (
     <>
-      <FilterSection label={groupsLoading ? 'Group' : `Group (${groups.length})`}>
-        <GroupPicker
-          groups={groups}
-          selectedGroupName={selectedGroupName}
-          onSelect={onSelectGroup}
-          loading={groupsLoading}
-        />
+      <FilterSection label="Scope">
+        <div className="flex flex-col gap-0.5">
+          {(['all', 'group', 'single'] as LiveScope[]).map((s) => (
+            <button
+              key={s}
+              onClick={() => onScopeChange(s)}
+              className={cn(
+                'w-full text-left px-3 py-2 text-sm rounded-lg transition-colors font-medium',
+                scope === s
+                  ? 'bg-violet-600 text-white'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800'
+              )}
+            >
+              {modeLabels[s]}
+            </button>
+          ))}
+        </div>
       </FilterSection>
 
-      {selectedGroupName && (
-        <FilterSection label={
-          groupRoutesLoading
-            ? 'Show stops for route…'
-            : `Show stops for route (${groupRouteIds.length})`
-        }>
+      {scope === 'group' && (
+        <FilterSection label={groupsLoading ? 'Group' : `Group (${groups.length})`}>
+          <GroupPicker
+            groups={groups}
+            selectedGroupName={selectedGroupName}
+            onSelect={onSelectGroup}
+            loading={groupsLoading || groupRoutesLoading}
+          />
+        </FilterSection>
+      )}
+
+      {scope === 'single' && (
+        <FilterSection label="Route">
           <RoutePicker
-            routeIds={groupRouteIds}
+            routeIds={routeIds}
             routeNames={routeNames}
             routeNamesLoading={routeNamesLoading}
+            routesLoading={routesLoading}
             selectedId={selectedRouteId}
             onSelect={onSelectRoute}
           />
@@ -571,6 +644,8 @@ function LiveGroupFilters({
     </>
   )
 }
+
+// ── Group picker ──────────────────────────────────────────────────────────────
 
 function GroupPicker({
   groups, selectedGroupName, onSelect, loading,
@@ -656,12 +731,15 @@ function GroupPicker({
   )
 }
 
+// ── Route picker ──────────────────────────────────────────────────────────────
+
 function RoutePicker({
-  routeIds, routeNames, routeNamesLoading, selectedId, onSelect,
+  routeIds, routeNames, routeNamesLoading, routesLoading, selectedId, onSelect,
 }: {
   routeIds: string[]
   routeNames: Map<string, string>
   routeNamesLoading: boolean
+  routesLoading: boolean
   selectedId: string | null
   onSelect: (id: string | null) => void
 }) {
@@ -687,9 +765,10 @@ function RoutePicker({
   })
 
   const selected = routeList.find((r) => r.id === selectedId)
+  const loading = routesLoading || (routeIds.length === 0 && routeNamesLoading)
   const label = selected
     ? `Route ${selected.shortName}${selected.longName ? ` – ${selected.longName}` : ''}`
-    : 'None (hide stops)'
+    : loading ? 'Loading routes…' : 'Select a route…'
 
   return (
     <div ref={ref} className="relative">
@@ -698,9 +777,16 @@ function RoutePicker({
         className="w-full flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-left transition-colors hover:border-gray-600"
       >
         <span className={selectedId ? 'text-white truncate pr-2' : 'text-gray-500'}>{label}</span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-gray-500 shrink-0">
-          <path strokeLinecap="round" d="M19 9l-7 7-7-7" />
-        </svg>
+        {loading ? (
+          <svg className="w-4 h-4 text-gray-500 shrink-0 animate-spin" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={3} strokeOpacity={0.25} />
+            <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth={3} strokeLinecap="round" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4 text-gray-500 shrink-0">
+            <path strokeLinecap="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        )}
       </button>
 
       {open && (
@@ -721,7 +807,7 @@ function RoutePicker({
                 onClick={() => { onSelect(null); setOpen(false) }}
                 className="w-full text-left px-3 py-2 text-xs text-blue-400 hover:bg-gray-700 border-b border-gray-700"
               >
-                None (hide stops)
+                Clear selection
               </button>
             )}
             {filtered.map((r) => (
@@ -736,7 +822,7 @@ function RoutePicker({
                 {r.longName && <span className="text-gray-500 text-xs truncate">{r.longName}</span>}
               </button>
             ))}
-            {filtered.length === 0 && (
+            {filtered.length === 0 && !loading && (
               <p className="text-gray-600 text-xs text-center py-4">No routes found</p>
             )}
             {routeNamesLoading && (
