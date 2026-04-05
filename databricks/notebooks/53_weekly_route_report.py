@@ -217,14 +217,45 @@ def get_route_data(route_id: str) -> dict:
           AND service_date >= '{sd}' AND service_date <= '{ed}'
     """).collect()
 
+    # ── Missed service: scheduled trips vs observed ───────────────────────────
+    # Compares GTFS scheduled trips (silver_dim_trip × calendar_dates) against
+    # trips that had at least one actual stop observation in gold_stop_dwell_fact.
+    missed_service = spark.sql(f"""
+        SELECT
+          scheduled.total_scheduled,
+          COALESCE(observed.total_observed, 0)                                    AS total_observed,
+          scheduled.total_scheduled - COALESCE(observed.total_observed, 0)        AS missed_trips,
+          ROUND(
+            (scheduled.total_scheduled - COALESCE(observed.total_observed, 0))
+            * 100.0 / NULLIF(scheduled.total_scheduled, 0), 1
+          )                                                                        AS missed_pct
+        FROM (
+          SELECT COUNT(*) AS total_scheduled
+          FROM silver_dim_trip t
+          JOIN silver_dim_calendar_dates cd
+            ON t.service_id = cd.service_id
+           AND cd.exception_type = 1
+           AND cd.date >= '{sd}' AND cd.date <= '{ed}'
+          WHERE t.route_id = '{sid}'
+        ) scheduled
+        CROSS JOIN (
+          SELECT COUNT(DISTINCT trip_id) AS total_observed
+          FROM gold_stop_dwell_fact
+          WHERE route_id = '{sid}'
+            AND service_date >= '{sd}' AND service_date <= '{ed}'
+            AND actual_arrival_ts IS NOT NULL
+        ) observed
+    """).collect()
+
     return {
-        "summary":       summary[0].asDict()    if summary       else {},
-        "trend":         [r.asDict() for r in trend],
-        "top_delayed":   [r.asDict() for r in top_delayed],
-        "time_windows":  [r.asDict() for r in time_windows],
-        "dwell":         dwell[0].asDict()      if dwell         else {},
-        "best_window":   time_windows[0].asDict()  if time_windows  else None,
-        "worst_window":  time_windows[-1].asDict() if time_windows  else None,
+        "summary":        summary[0].asDict()    if summary        else {},
+        "trend":          [r.asDict() for r in trend],
+        "top_delayed":    [r.asDict() for r in top_delayed],
+        "time_windows":   [r.asDict() for r in time_windows],
+        "dwell":          dwell[0].asDict()       if dwell          else {},
+        "best_window":    time_windows[0].asDict()   if time_windows   else None,
+        "worst_window":   time_windows[-1].asDict()  if time_windows   else None,
+        "missed_service": missed_service[0].asDict() if missed_service else {},
     }
 
 def fmt_window(hr: int) -> str:
@@ -245,8 +276,9 @@ fmapi_client = OpenAI(
 )
 
 def generate_narrative(route_name: str, data: dict) -> str:
-    s = data["summary"]
+    s  = data["summary"]
     dw = data["dwell"]
+    ms = data.get("missed_service", {})
 
     trend_lines = "\n".join(
         f"  {r['service_date']}: {r['on_time_pct']}% on-time ({r['stops']} stop observations)"
@@ -259,7 +291,29 @@ def generate_narrative(route_name: str, data: dict) -> str:
     best  = fmt_window(int(data["best_window"]["window_start_hr"]))  if data["best_window"]  else "N/A"
     worst = fmt_window(int(data["worst_window"]["window_start_hr"])) if data["worst_window"] else "N/A"
 
-    prompt = f"""You are a transit performance analyst writing a weekly report for a transit planner or operations manager at Valley Metro in Phoenix, Arizona.
+    # Missed service line
+    missed_trips = int(ms.get("missed_trips", 0) or 0)
+    missed_pct   = float(ms.get("missed_pct", 0.0) or 0.0)
+    scheduled    = int(ms.get("total_scheduled", 0) or 0)
+    missed_line  = (
+        f"- Missed service: {missed_trips} of {scheduled} scheduled trips had no recorded actuals ({missed_pct}%)"
+        if scheduled > 0
+        else "- Missed service: scheduled trip count unavailable"
+    )
+
+    # Caveat when the worst time window falls in low-ridership overnight hours (12 AM–6 AM Phoenix)
+    worst_hr = int(data["worst_window"]["window_start_hr"]) if data["worst_window"] else -1
+    overnight_caveat = ""
+    if 0 <= worst_hr < 6:
+        worst_stops = data["worst_window"].get("stops", 0) if data["worst_window"] else 0
+        overnight_caveat = (
+            f"\nCAVEAT: The most challenging window ({worst}) has only {worst_stops} stop observations "
+            f"and falls during overnight/early-morning hours when Valley Metro runs very few trips. "
+            "This is NOT operationally significant — do not treat it as a primary problem area. "
+            "Focus paragraph 2 on the next-worst daytime or peak-hour window instead."
+        )
+
+    prompt = f"""You are a transit performance analyst writing a weekly briefing for a Valley Metro transit planner or operations manager in Phoenix, Arizona.
 
 Route: {route_name}
 Report period: {week_label}
@@ -271,19 +325,30 @@ PERFORMANCE DATA:
 - Dwell time: P50={dw.get('p50_dwell_sec', 'N/A')}s, P90={dw.get('p90_dwell_sec', 'N/A')}s ({dw.get('dwell_observations', 0)} observations)
 - Best performing time window: {best}
 - Most challenging time window: {worst}
+{missed_line}
 
 DAILY OTP TREND:
 {trend_lines}
 
 TOP 5 MOST DELAYED STOPS:
 {delay_lines}
+{overnight_caveat}
+
+WRITING GUIDELINES:
+- Do NOT open paragraph 1 with "[Route name] is concerning" or any variant of "is concerning."
+  Lead with the most important finding instead (e.g. the OTP level, a trend, a standout stop).
+- Do NOT flag overnight or early-morning windows (12 AM–6 AM) as a primary problem unless
+  they have significant trip volume. If forced to mention them, note the low sample count.
+- If the top delayed stops are geographically clustered (e.g. all in a downtown segment, all
+  near a freeway interchange), call that pattern out explicitly — it points to a corridor issue.
+- Be specific and factual. Synthesise the numbers into insight; do not list them verbatim.
+- Avoid filler phrases like "it is important to note", "moving forward", or "in conclusion".
+- If missed service is > 5%, flag it briefly in paragraph 1 or 3.
 
 Write a professional 3-paragraph summary:
-1. Overall performance assessment for the week — is this route healthy, concerning, or improving?
-2. Key problem areas — which stops and time windows need attention and why?
-3. Actionable recommendations — what should operations staff investigate or adjust?
-
-Be specific, concise, and direct. Avoid generic phrases. Do not repeat the raw numbers verbatim — synthesize them into insight."""
+1. Overall performance — is this route healthy, stable, or struggling this week? Lead with the headline finding.
+2. Key problem areas — which stops and time windows (daytime/peak) need attention and why?
+3. Actionable recommendations — what should operations staff investigate or adjust?"""
 
     response = fmapi_client.chat.completions.create(
         model="databricks-meta-llama-3-3-70b-instruct",
@@ -302,6 +367,7 @@ Be specific, concise, and direct. Avoid generic phrases. Do not repeat the raw n
 def build_html(route_name: str, data: dict, narrative: str, user_email: str) -> str:
     s   = data["summary"]
     dw  = data["dwell"]
+    ms  = data.get("missed_service", {})
 
     otp_color = (
         "#4db6ac" if float(s.get("on_time_pct", 0)) >= 80
@@ -335,6 +401,22 @@ def build_html(route_name: str, data: dict, narrative: str, user_email: str) -> 
         for p in narrative.split("\n\n") if p.strip()
     )
 
+    # Pre-compute missed service banner (avoid nested f-string with same quote type)
+    _missed = int(ms.get("missed_trips", 0) or 0)
+    _sched  = int(ms.get("total_scheduled", 0) or 0)
+    _pct    = float(ms.get("missed_pct", 0.0) or 0.0)
+    missed_service_html = (
+        '<div style="background:#1c1917;border:1px solid #78350f;border-radius:10px;'
+        'padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:12px;">'
+        '<span style="color:#fb923c;font-size:18px;">&#9888;</span>'
+        '<div>'
+        '<p style="margin:0 0 2px;color:#fb923c;font-size:12px;font-weight:600;'
+        'text-transform:uppercase;letter-spacing:.06em;">Missed Service Detected</p>'
+        f'<p style="margin:0;color:#d6d3d1;font-size:13px;">{_missed} of {_sched} '
+        f'scheduled trips had no recorded actuals this week ({_pct}%)</p>'
+        '</div></div>'
+    ) if _missed > 0 else ""
+
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -361,6 +443,9 @@ def build_html(route_name: str, data: dict, narrative: str, user_email: str) -> 
           ("Dwell P90", f"{dw.get('p90_dwell_sec', '—')}s", "#9ca3af"),
       ])}
     </div>
+
+    <!-- Missed service alert (only shown when missed_trips > 0) -->
+    {missed_service_html}
 
     <!-- AI Narrative -->
     <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px;margin-bottom:16px;">

@@ -311,7 +311,8 @@ TASK
 Please produce an incident brief with the following sections:
 
 1. **Executive Summary** (2–3 sentences): What happened on {target_date}? How significant
-   was this relative to baseline? Was it widespread or isolated?
+   was this relative to baseline? Was it widespread or isolated? Do NOT open with a route
+   name followed by "is concerning" — lead with the headline finding.
 
 2. **Affected Routes**: A concise list of the most impacted routes with their severity,
    delay magnitude, and OTP impact.
@@ -319,19 +320,26 @@ Please produce an incident brief with the following sections:
 3. **Likely Contributing Factors**: Based on the time-of-day pattern, the routes affected,
    and the delay magnitudes, what are the most probable operational causes?
    (e.g. peak-hour congestion, specific corridor issues, schedule adherence problems)
+   If the heaviest anomaly concentration is in the Phoenix overnight window (12 AM–6 AM),
+   note that it is a low-ridership artifact and focus on any daytime patterns instead.
 
 4. **Recommended Follow-up Actions**: Specific, actionable steps for transit planners
    (e.g. schedule review for specific routes, operator feedback, passenger communication).
 
 Keep the brief concise and actionable. Use plain language suitable for transit operations
 managers, not data engineers. Avoid restating all the numbers — synthesise them into
-insights.
+insights. Avoid filler phrases like "it is important to note" or "moving forward".
 """.strip()
 
 system_prompt = (
     "You are a transit operations analyst assistant for Valley Metro in Phoenix, AZ. "
     "Generate concise, actionable incident briefs for transit planners based on performance data. "
-    "Focus on operational insights and practical recommendations, not data methodology."
+    "Focus on operational insights and practical recommendations, not data methodology. "
+    "Do NOT flag overnight or early-morning hours (Phoenix 12 AM–6 AM, UTC 07:xx–13:xx) as "
+    "primary problem windows — these carry minimal ridership and anomaly counts there are "
+    "low-confidence artifacts of a short baseline, not operationally meaningful issues. "
+    "Phoenix afternoon peak (UTC 19:xx–23:xx, Phoenix noon–4 PM) IS operationally significant. "
+    "Vary your sentence openings and section leads; avoid repeating the same phrasing."
 )
 
 print(f"Prompt length: {len(user_prompt):,} characters")
