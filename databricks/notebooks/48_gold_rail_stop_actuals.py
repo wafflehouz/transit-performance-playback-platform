@@ -161,15 +161,33 @@ vp_with_dist = (
         * F.pow(F.sin(F.col("_dlon") / 2), 2),
     )
     .withColumn("_dist_m", F.lit(2.0 * _EARTH_R) * F.asin(F.sqrt(F.col("_a"))))
-    # True when vehicle is physically near the stop platform
     .withColumn("_near_stop", F.col("_dist_m") <= RAIL_ARRIVAL_RADIUS_M)
     .drop("_dlat", "_dlon", "_a", "_dist_m", "stop_lat", "stop_lon")
 )
 
-# Order: near-stop pings first (priority 1), fallback pings second (priority 2),
-# both sorted by vehicle_ts within each group. Row 1 = best arrival estimate.
+# Arrival window: VP feeds sometimes keep broadcasting a stale trip_id for hours
+# after the trip ends (e.g., parked vehicle near a stop late at night). Proximity
+# filter without a time bound would select those late pings over the true arrival.
+# Fix: anchor the search to within 10 minutes of the FIRST ping at each sequence.
+# The true arrival is always within this window; stale broadcasts hours later are not.
+_w_min = Window.partitionBy("trip_id", "stop_sequence")
+vp_with_dist = (
+    vp_with_dist
+    .withColumn("_first_ts_unix", F.min(F.unix_timestamp("vehicle_ts")).over(_w_min))
+    .withColumn(
+        "_in_window",
+        (F.unix_timestamp("vehicle_ts") - F.col("_first_ts_unix")) <= 600  # 10-min window
+    )
+)
+
+# Priority:
+# 1 — near stop AND in arrival window (best: physically arrived, timely)
+# 2 — in arrival window only (timely but not yet within 300m — use as fallback)
+# 3 — everything else (last resort: prevents gaps but may be stale)
 w_arrival = Window.partitionBy("trip_id", "stop_sequence").orderBy(
-    F.when(F.col("_near_stop") == True, F.lit(1)).otherwise(F.lit(2)),
+    F.when(F.col("_near_stop") & F.col("_in_window"), F.lit(1))
+     .when(F.col("_in_window"), F.lit(2))
+     .otherwise(F.lit(3)),
     "vehicle_ts",
 )
 
@@ -177,7 +195,7 @@ first_ping = (
     vp_with_dist
     .withColumn("rn", F.row_number().over(w_arrival))
     .filter(F.col("rn") == 1)
-    .drop("rn", "_near_stop", "lat", "lon")
+    .drop("rn", "_near_stop", "_in_window", "_first_ts_unix", "lat", "lon")
     .withColumnRenamed("vehicle_ts", "actual_arrival_ts")
 )
 
