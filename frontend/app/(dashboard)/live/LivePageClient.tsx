@@ -365,15 +365,29 @@ export default function LivePageClient() {
   )
 }
 
+// GTFS start_time is "HH:MM:SS" in Phoenix local (24h, may exceed 24:00 for post-midnight trips)
+function fmtStartTime(t: string | null): string | null {
+  if (!t) return null
+  const parts = t.split(':').map(Number)
+  if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) return null
+  const [h, m] = parts
+  const h12 = h % 12 || 12
+  const ampm = h % 24 < 12 ? 'AM' : 'PM'
+  return `${h12}:${String(m).padStart(2, '0')} ${ampm}`
+}
+
 // ── Vehicle detail panel ───────────────────────────────────────────────────────
 
 function VehicleDetailPanel({ vehicle, onBack }: { vehicle: LiveVehicle; onBack: () => void }) {
   const color = OTP_COLOR[vehicle.otp_status]
   const speedMph = vehicle.speed_mps != null ? (vehicle.speed_mps * 2.237).toFixed(0) : null
+  // Prefer formatted start time; fall back to raw trip_id if feed doesn't include startTime
+  const startLabel = fmtStartTime(vehicle.start_time) ?? vehicle.trip_id ?? '—'
+
   const rows: [string, string][] = [
     ['Route', vehicle.route_id  ?? '—'],
     ['To',    vehicle.headsign  ?? '—'],
-    ['Trip',  vehicle.trip_id   ?? '—'],
+    ['Start', startLabel],
     ['Speed', speedMph ? `${speedMph} mph` : '—'],
   ]
 

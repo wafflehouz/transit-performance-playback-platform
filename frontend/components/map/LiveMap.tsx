@@ -12,6 +12,7 @@ export interface LiveVehicle {
   trip_id: string | null
   route_id: string | null
   direction_id: number | null
+  start_time: string | null     // "HH:MM:SS" Phoenix local from GTFS-RT TripDescriptor
   lat: number
   lon: number
   bearing: number | null
