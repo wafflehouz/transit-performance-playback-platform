@@ -27,6 +27,8 @@ interface Props {
   fetchedAtMs: number | null  // epoch ms when vehicles were fetched — for dead reckoning
   routeStops: Array<RouteStop & { point_type?: string }>
   routeColor: string | null   // GTFS route_color (#RRGGBB) — null falls back to default
+  selectedVehicleId?: string | null
+  onVehicleSelect?: (v: LiveVehicle | null) => void
 }
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY!
@@ -74,17 +76,22 @@ function deadReckon(
 
 const DEFAULT_ROUTE_COLOR = '#38bdf8'
 
-export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor }: Props) {
+export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor, selectedVehicleId, onVehicleSelect }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MaplibreMap | null>(null)
   const popupRef = useRef<Popup | null>(null)
   const vehiclesRef = useRef<LiveVehicle[]>(vehicles)
   const fetchedAtMsRef = useRef<number | null>(fetchedAtMs)
+  const selectedVehicleIdRef = useRef<string | null>(selectedVehicleId ?? null)
+  const onVehicleSelectRef = useRef(onVehicleSelect)
+  const animFrameRef = useRef<number | null>(null)
   const [mapReady, setMapReady] = useState(false)
 
-  // Keep refs current for the dead reckoning interval
+  // Keep refs current for the dead reckoning interval and event handlers
   useEffect(() => { vehiclesRef.current = vehicles }, [vehicles])
   useEffect(() => { fetchedAtMsRef.current = fetchedAtMs }, [fetchedAtMs])
+  useEffect(() => { selectedVehicleIdRef.current = selectedVehicleId ?? null }, [selectedVehicleId])
+  useEffect(() => { onVehicleSelectRef.current = onVehicleSelect }, [onVehicleSelect])
 
   // Init map once
   useEffect(() => {
@@ -247,6 +254,83 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor 
           },
         }, 'veh-glow')
 
+        // ── Selected vehicle layers ────────────────────────────────────────────
+        // Single-feature source updated in the dead reckoning loop
+        map.addSource('selected-vehicle', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        })
+
+        // Expanding pulse ring — rendered behind the main circle, driven by rAF
+        map.addLayer({
+          id: 'veh-selected-pulse',
+          type: 'circle',
+          source: 'selected-vehicle',
+          paint: {
+            'circle-radius': 12,
+            'circle-color': 'transparent',
+            'circle-opacity': 0,
+            'circle-stroke-width': 2,
+            'circle-stroke-color': ['get', 'color'],
+            'circle-stroke-opacity': 0,
+          },
+        }, 'veh-circle')  // insert below main circle so it expands outward from behind
+
+        // Solid white selection ring — persistent outline above the main circle
+        map.addLayer({
+          id: 'veh-selected-ring',
+          type: 'circle',
+          source: 'selected-vehicle',
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 11, 12, 15, 15, 20],
+            'circle-color': 'transparent',
+            'circle-opacity': 0,
+            'circle-stroke-width': 2.5,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-opacity': 0.95,
+          },
+        }, 'veh-bearing')  // insert below bearing arrows so arrows remain on top
+
+        // ── Pulse animation (requestAnimationFrame) ────────────────────────────
+        const PULSE_DURATION = 1800  // ms per cycle
+        const pulseEpoch = performance.now()
+
+        function animatePulse() {
+          const t = ((performance.now() - pulseEpoch) % PULSE_DURATION) / PULSE_DURATION
+          // Base radius tracks veh-circle: 8px at zoom 9, 16px at zoom 15
+          const zoom = map.getZoom()
+          const baseR = Math.max(8, Math.min(16, 8 + ((zoom - 9) / 6) * 8))
+          map.setPaintProperty('veh-selected-pulse', 'circle-radius', baseR + t * 18)
+          // Ease-out opacity so the ring fades as it expands
+          map.setPaintProperty('veh-selected-pulse', 'circle-stroke-opacity', 0.7 * (1 - t) * (1 - t))
+          animFrameRef.current = requestAnimationFrame(animatePulse)
+        }
+        animFrameRef.current = requestAnimationFrame(animatePulse)
+
+        // ── Click: select / deselect vehicle ──────────────────────────────────
+        map.on('click', 'veh-circle', (e) => {
+          e.originalEvent.stopPropagation()
+          popupRef.current?.remove()
+          const feat = e.features?.[0]
+          if (!feat) return
+          const vehicleId = feat.properties?.vehicle_id as string
+          // Toggle: clicking the already-selected vehicle deselects it
+          if (vehicleId === selectedVehicleIdRef.current) {
+            onVehicleSelectRef.current?.(null)
+          } else {
+            const vehicle = vehiclesRef.current.find((v) => v.vehicle_id === vehicleId)
+            onVehicleSelectRef.current?.(vehicle ?? null)
+          }
+        })
+
+        // Click map background → deselect
+        map.on('click', (e) => {
+          const hits = map.queryRenderedFeatures(e.point, { layers: ['veh-circle'] })
+          if (hits.length === 0 && selectedVehicleIdRef.current) {
+            onVehicleSelectRef.current?.(null)
+          }
+        })
+
         // Hover popup
         map.on('mouseenter', 'veh-circle', (e) => {
           map.getCanvas().style.cursor = 'pointer'
@@ -287,7 +371,10 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor 
       })
     })
 
-    return () => { map?.remove() }
+    return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+      map?.remove()
+    }
   }, [])
 
   // Update route line + stop markers when routeStops changes
@@ -387,6 +474,25 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor 
           }
         }),
       })
+
+      // Keep selected-vehicle source tracking the selected vehicle's dead-reckoned position
+      const selSrc = map.getSource('selected-vehicle') as { setData: (d: unknown) => void } | undefined
+      if (selSrc) {
+        const selV = vehiclesRef.current.find((v) => v.vehicle_id === selectedVehicleIdRef.current)
+        if (selV) {
+          const [slat, slon] = deadReckon(selV.lat, selV.lon, selV.bearing, selV.speed_mps, elapsed)
+          selSrc.setData({
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [slon, slat] },
+              properties: { color: otpColor(selV.otp_status) },
+            }],
+          })
+        } else {
+          selSrc.setData({ type: 'FeatureCollection', features: [] })
+        }
+      }
     }, 1_000)
 
     return () => clearInterval(interval)

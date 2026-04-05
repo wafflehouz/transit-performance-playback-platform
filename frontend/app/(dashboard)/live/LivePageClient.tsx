@@ -64,6 +64,14 @@ const OTP_COLOR: Record<OtpStatus, string> = {
   unknown:   '#6b7280',
 }
 
+function formatDelay(s: number | null): string {
+  if (s === null) return 'No schedule data'
+  if (s < -60) return `${Math.abs(Math.round(s / 60))}m early`
+  if (s <= 60)  return 'On time'
+  const m = Math.floor(s / 60), sec = s % 60
+  return sec > 0 ? `+${m}m ${sec}s late` : `+${m}m late`
+}
+
 export default function LivePageClient() {
   const { setContent } = useFilterPanel()
   const setContentRef = useRef(setContent)
@@ -76,6 +84,9 @@ export default function LivePageClient() {
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null)
   const [routesLoading, setRoutesLoading] = useState(true)
   const [routeNamesLoading, setRouteNamesLoading] = useState(false)
+
+  // Selected vehicle
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null)
 
   // Feed
   const [feed, setFeed] = useState<FeedResponse | null>(null)
@@ -234,7 +245,8 @@ export default function LivePageClient() {
   // Start/restart polling on route change
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current)
-    setFeed(null) // always clear stale vehicles immediately on route change
+    setFeed(null)             // clear stale vehicles immediately on route change
+    setSelectedVehicleId(null) // deselect any vehicle when switching routes
     if (!selectedRouteId) { return }
 
     fetchVehicles(selectedRouteId)
@@ -249,19 +261,30 @@ export default function LivePageClient() {
   ) ?? {}
 
   const selectedRoute = routes.find((r) => r.route_id === selectedRouteId)
+  // Always derive live vehicle data from the current feed so the panel auto-refreshes
+  const selectedVehicle = feed?.vehicles.find((v) => v.vehicle_id === selectedVehicleId) ?? null
 
-  // Inject filter panel — use ref so setContent never appears in deps
+  // Inject filter panel — swaps to vehicle detail panel when a vehicle is selected
   useEffect(() => {
-    setContentRef.current(
-      <LiveFilters
-        routes={routes}
-        selectedRouteId={selectedRouteId}
-        onSelect={setSelectedRouteId}
-        routesLoading={routesLoading}
-        routeNamesLoading={routeNamesLoading}
-      />
-    )
-  }, [routes, selectedRouteId, routesLoading, routeNamesLoading])
+    if (selectedVehicle) {
+      setContentRef.current(
+        <VehicleDetailPanel
+          vehicle={selectedVehicle}
+          onBack={() => setSelectedVehicleId(null)}
+        />
+      )
+    } else {
+      setContentRef.current(
+        <LiveFilters
+          routes={routes}
+          selectedRouteId={selectedRouteId}
+          onSelect={setSelectedRouteId}
+          routesLoading={routesLoading}
+          routeNamesLoading={routeNamesLoading}
+        />
+      )
+    }
+  }, [routes, selectedRouteId, routesLoading, routeNamesLoading, selectedVehicle])
 
   return (
     <div className="flex flex-col h-full relative">
@@ -335,7 +358,80 @@ export default function LivePageClient() {
     routeTypes.get(selectedRouteId) ?? 3,
     routes.find(r => r.route_id === selectedRouteId)?.route_short_name
   ) : null}
+  selectedVehicleId={selectedVehicleId}
+  onVehicleSelect={(v) => setSelectedVehicleId(v ? v.vehicle_id : null)}
 />
+    </div>
+  )
+}
+
+// ── Vehicle detail panel ───────────────────────────────────────────────────────
+
+function VehicleDetailPanel({ vehicle, onBack }: { vehicle: LiveVehicle; onBack: () => void }) {
+  const color = OTP_COLOR[vehicle.otp_status]
+  const speedMph = vehicle.speed_mps != null ? (vehicle.speed_mps * 2.237).toFixed(0) : null
+  const dirLabel = vehicle.direction_id === 0 ? 'Outbound' : vehicle.direction_id === 1 ? 'Inbound' : '—'
+
+  const rows: [string, string][] = [
+    ['Route',     vehicle.route_id      ?? '—'],
+    ['Direction', dirLabel],
+    ['To',        vehicle.headsign      ?? '—'],
+    ['Trip',      vehicle.trip_id       ?? '—'],
+    ['Speed',     speedMph ? `${speedMph} mph` : '—'],
+  ]
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Back button */}
+      <button
+        onClick={onBack}
+        className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors w-fit"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-3.5 h-3.5">
+          <path strokeLinecap="round" d="M19 12H5M12 5l-7 7 7 7" />
+        </svg>
+        Back to route filter
+      </button>
+
+      {/* Vehicle header */}
+      <div>
+        <span
+          className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full border capitalize mb-2"
+          style={{ color, borderColor: `${color}55`, background: `${color}20` }}
+        >
+          {vehicle.otp_status.replace('_', ' ')}
+        </span>
+        <h2 className="text-white font-bold text-base leading-tight">
+          Vehicle {vehicle.vehicle_id}
+        </h2>
+      </div>
+
+      {/* Delay — large focal number */}
+      <div
+        className="rounded-xl px-4 py-3 text-center border"
+        style={{ background: `${color}10`, borderColor: `${color}30` }}
+      >
+        <p className="text-gray-400 text-xs mb-1 uppercase tracking-wide">Current Delay</p>
+        <p className="font-bold text-2xl" style={{ color }}>
+          {formatDelay(vehicle.delay_seconds)}
+        </p>
+      </div>
+
+      {/* Detail rows */}
+      <div className="space-y-2.5">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex items-start justify-between gap-3 text-xs">
+            <span className="text-gray-500 shrink-0">{label}</span>
+            <span className="text-gray-200 font-medium text-right leading-relaxed">{value}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Live indicator */}
+      <div className="flex items-center gap-1.5 pt-1">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+        <span className="text-gray-600 text-xs">Live — refreshes every 30s</span>
+      </div>
     </div>
   )
 }
