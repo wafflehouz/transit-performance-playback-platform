@@ -26,7 +26,7 @@ interface Props {
   vehicles: LiveVehicle[]
   fetchedAtMs: number | null  // epoch ms when vehicles were fetched — for dead reckoning
   routeStops: Array<RouteStop & { point_type?: string }>
-  routeColor: string | null   // GTFS route_color (#RRGGBB) — null falls back to default
+  routeColors: Map<string, string>  // route_id → hex; each line feature reads its own color
   selectedVehicleId?: string | null
   onVehicleSelect?: (v: LiveVehicle | null) => void
 }
@@ -76,7 +76,7 @@ function deadReckon(
 
 const DEFAULT_ROUTE_COLOR = '#38bdf8'
 
-export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor, selectedVehicleId, onVehicleSelect }: Props) {
+export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColors, selectedVehicleId, onVehicleSelect }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MaplibreMap | null>(null)
   const popupRef = useRef<Popup | null>(null)
@@ -212,7 +212,7 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor,
           type: 'line',
           source: 'route-line',
           paint: {
-            'line-color': '#38bdf8',
+            'line-color': ['coalesce', ['get', 'color'], '#38bdf8'],
             'line-width': ['interpolate', ['linear'], ['zoom'], 9, 3, 13, 5],
             'line-opacity': 0.75,
           },
@@ -377,42 +377,44 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor,
     }
   }, [])
 
-  // Update route line + stop markers when routeStops changes
+  // Update route line + stop markers when routeStops or routeColors changes
   useEffect(() => {
     if (!mapReady) return
     const map = mapRef.current
     if (!map) return
 
-    // Split into shape points (for the line) and stop points (for the markers)
     const shapeRows = routeStops.filter((s) => s.point_type === 'shape')
     const stopRows  = routeStops.filter((s) => s.point_type === 'stop')
-
-    // Fall back to all points as the line if no shape data returned
     const lineSource = shapeRows.length > 0 ? shapeRows : routeStops
 
-    // Group line points by direction to build one LineString per direction
-    const byDir = new Map<number, RouteStop[]>()
+    // Group by (route_id, direction_id) — supports single or multiple routes
+    const byRouteDir = new Map<string, RouteStop[]>()
     for (const s of lineSource) {
-      const arr = byDir.get(s.direction_id) ?? []
+      const key = `${s.route_id ?? 'default'}|${s.direction_id}`
+      const arr = byRouteDir.get(key) ?? []
       arr.push(s)
-      byDir.set(s.direction_id, arr)
+      byRouteDir.set(key, arr)
     }
 
-    // Route line source — one LineString per direction, ordered by stop_sequence
-    const lineFeatures = Array.from(byDir.entries()).map(([dir, pts]) => ({
-      type: 'Feature' as const,
-      geometry: {
-        type: 'LineString' as const,
-        coordinates: pts
-          .sort((a, b) => a.stop_sequence - b.stop_sequence)
-          .map((s) => [s.lon, s.lat]),
-      },
-      properties: { direction_id: dir },
-    }))
+    // One LineString per (route, direction) — color embedded in feature properties
+    const lineFeatures = Array.from(byRouteDir.entries()).map(([key, pts]) => {
+      const [routeId, dirStr] = key.split('|')
+      const color = routeColors.get(routeId) ?? DEFAULT_ROUTE_COLOR
+      return {
+        type: 'Feature' as const,
+        geometry: {
+          type: 'LineString' as const,
+          coordinates: pts
+            .sort((a, b) => a.stop_sequence - b.stop_sequence)
+            .map((s) => [s.lon, s.lat]),
+        },
+        properties: { route_id: routeId, direction_id: Number(dirStr), color },
+      }
+    })
 
-    // Stop point source — deduplicate by stop_id
+    // Stop point source — deduplicate by stop_id (only populated in single-route mode)
     const seenStops = new Set<string>()
-    const stopFeatures = (stopRows.length > 0 ? stopRows : routeStops).flatMap((s) => {
+    const stopFeatures = stopRows.flatMap((s) => {
       if (seenStops.has(s.stop_id)) return []
       seenStops.add(s.stop_id)
       return [{
@@ -426,17 +428,20 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColor,
     const stopSrc = map.getSource('route-stops') as { setData: (d: unknown) => void } | undefined
     lineSrc?.setData({ type: 'FeatureCollection', features: lineFeatures })
     stopSrc?.setData({ type: 'FeatureCollection', features: stopFeatures })
-  }, [mapReady, routeStops])
+  }, [mapReady, routeStops, routeColors])
 
-  // Update route line + stop colors when route changes
+  // Update stop circle color when route selection changes
+  // Route line colors are embedded per-feature so don't need setPaintProperty
   useEffect(() => {
     if (!mapReady) return
     const map = mapRef.current
     if (!map) return
-    const color = routeColor ?? DEFAULT_ROUTE_COLOR
-    map.setPaintProperty('route-line-fill', 'line-color', color)
-    map.setPaintProperty('stop-circles', 'circle-stroke-color', color)
-  }, [mapReady, routeColor])
+    // Stop circles only show in single-route mode — use that route's color
+    const stopColor = routeColors.size === 1
+      ? Array.from(routeColors.values())[0]
+      : DEFAULT_ROUTE_COLOR
+    map.setPaintProperty('stop-circles', 'circle-stroke-color', stopColor)
+  }, [mapReady, routeColors])
 
   // Dead reckoning — update positions every second
   useEffect(() => {

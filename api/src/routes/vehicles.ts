@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express'
-import { getVehiclesForRoute, getCacheStatus, getActiveRouteIds } from '../cache'
+import { getVehiclesForRoute, getVehiclesForRoutes, getCacheStatus, getActiveRouteIds } from '../cache'
 
 const router = Router()
 
@@ -30,6 +30,35 @@ router.get('/', (req: Request, res: Response) => {
     fetched_at: status.fetched_at,
     fetched_at_ms: status.fetched_at_ms,
     feed_ts: status.feed_ts,
+    vehicles,
+  })
+})
+
+/**
+ * GET /vehicles/multi?route_ids=1,2,3
+ * Returns cached positions for all vehicles on the given routes (comma-separated).
+ */
+router.get('/multi', (req: Request, res: Response) => {
+  const raw = req.query.route_ids as string | undefined
+  const ids = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : []
+
+  if (!ids.length) {
+    res.status(400).json({ error: 'route_ids query param is required (comma-separated)' })
+    return
+  }
+
+  const status = getCacheStatus()
+  if (status.error && status.vehicle_count === 0) {
+    res.status(503).json({ error: `Feed unavailable: ${status.error}` })
+    return
+  }
+
+  const vehicles = getVehiclesForRoutes(ids)
+  res.json({
+    route_ids: ids,
+    vehicle_count: vehicles.length,
+    fetched_at: status.fetched_at,
+    fetched_at_ms: status.fetched_at_ms,
     vehicles,
   })
 })

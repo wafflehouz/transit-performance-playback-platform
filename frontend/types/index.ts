@@ -77,6 +77,7 @@ export interface RouteStop {
   lat: number
   lon: number
   direction_id: number
+  route_id?: string   // present on shape points when multiple routes are loaded
 }
 
 export interface CongestionHex {
