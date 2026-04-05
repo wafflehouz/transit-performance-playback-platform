@@ -107,25 +107,75 @@ if rail_count == 0:
 
 # COMMAND ----------
 
-# MAGIC %md ## Step 2 — Detect First VP Ping per (trip_id, stop_sequence)
+# MAGIC %md ## Step 2 — Detect Arrival via VP Proximity Filter
 # MAGIC
-# MAGIC Within each `(trip_id, stop_sequence)` window, the row with the earliest
-# MAGIC `vehicle_ts` is the moment the train first appeared at that stop — i.e.,
-# MAGIC the actual arrival. Subsequent pings at the same sequence represent dwell.
+# MAGIC **Problem with naive first-ping approach:**
+# MAGIC Valley Metro's VP feed advances `current_stop_sequence` to N when the vehicle
+# MAGIC **departs** the previous stop (IN_TRANSIT_TO semantics), not when it arrives at
+# MAGIC stop N. Since `current_status` is 100% null, we can't distinguish IN_TRANSIT_TO
+# MAGIC from STOPPED_AT. Taking the absolute first ping at seq N gives us the vehicle
+# MAGIC 1–3 minutes before it physically reaches the platform — producing a systematic
+# MAGIC early bias (~39% early vs Swiftly's ~3.5% early).
 # MAGIC
-# MAGIC The 30-second downsampling in Silver 31 means we have at most one row per
-# MAGIC vehicle per 30s bucket, so `vehicle_ts` here is the most precise timestamp
-# MAGIC available within each bucket.
+# MAGIC **Fix — proximity-aware first ping:**
+# MAGIC Join each VP ping to the stop's GPS coordinates (via `stop_id`), compute the
+# MAGIC haversine distance between the vehicle and the stop, then order pings so that
+# MAGIC near-stop pings (≤ `RAIL_ARRIVAL_RADIUS_M`) come first. The first ping within
+# MAGIC radius = vehicle has physically arrived near the platform.
+# MAGIC
+# MAGIC **Fallback:** if no ping is within the radius for a (trip_id, stop_sequence)
+# MAGIC (GPS gap, coordinate mismatch), falls back to the absolute earliest ping —
+# MAGIC preserving original behavior rather than dropping the stop.
+# MAGIC
+# MAGIC **Radius choice:** 300 m. At peak rail speed (~11 m/s) with 30 s downsampling,
+# MAGIC the train travels ~330 m between pings. 300 m guarantees at least one ping is
+# MAGIC captured within one polling cycle of actual platform arrival.
 
 # COMMAND ----------
 
-w_first = Window.partitionBy("trip_id", "stop_sequence").orderBy("vehicle_ts")
+RAIL_ARRIVAL_RADIUS_M = 300.0
+_EARTH_R = 6371000.0
+
+stop_locs = (
+    spark.table(SILVER_DIM_STOP)
+    .select(
+        F.col("stop_id"),
+        F.col("lat").alias("stop_lat"),
+        F.col("lon").alias("stop_lon"),
+    )
+)
+
+# Join VP pings to the stop they're reporting (stop_id = current stop at that seq)
+vp_with_dist = (
+    vp_rail
+    .join(stop_locs, on="stop_id", how="left")
+    .withColumn("_dlat", F.radians(F.col("lat") - F.col("stop_lat")))
+    .withColumn("_dlon", F.radians(F.col("lon") - F.col("stop_lon")))
+    .withColumn(
+        "_a",
+        F.pow(F.sin(F.col("_dlat") / 2), 2)
+        + F.cos(F.radians(F.col("stop_lat")))
+        * F.cos(F.radians(F.col("lat")))
+        * F.pow(F.sin(F.col("_dlon") / 2), 2),
+    )
+    .withColumn("_dist_m", F.lit(2.0 * _EARTH_R) * F.asin(F.sqrt(F.col("_a"))))
+    # True when vehicle is physically near the stop platform
+    .withColumn("_near_stop", F.col("_dist_m") <= RAIL_ARRIVAL_RADIUS_M)
+    .drop("_dlat", "_dlon", "_a", "_dist_m", "stop_lat", "stop_lon")
+)
+
+# Order: near-stop pings first (priority 1), fallback pings second (priority 2),
+# both sorted by vehicle_ts within each group. Row 1 = best arrival estimate.
+w_arrival = Window.partitionBy("trip_id", "stop_sequence").orderBy(
+    F.when(F.col("_near_stop") == True, F.lit(1)).otherwise(F.lit(2)),
+    "vehicle_ts",
+)
 
 first_ping = (
-    vp_rail
-    .withColumn("rn", F.row_number().over(w_first))
+    vp_with_dist
+    .withColumn("rn", F.row_number().over(w_arrival))
     .filter(F.col("rn") == 1)
-    .drop("rn")
+    .drop("rn", "_near_stop")
     .withColumnRenamed("vehicle_ts", "actual_arrival_ts")
 )
 
