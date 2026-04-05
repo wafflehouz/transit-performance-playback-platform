@@ -87,6 +87,7 @@ export default function LivePageClient() {
 
   // Selected vehicle
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null)
+  const [tripStartTs, setTripStartTs] = useState<string | null>(null)
 
   // Feed
   const [feed, setFeed] = useState<FeedResponse | null>(null)
@@ -163,6 +164,34 @@ export default function LivePageClient() {
       setRouteStops(tagged)
     })
   }, [selectedRouteId])
+
+  // Fetch trip start time from static GTFS when a vehicle is selected
+  useEffect(() => {
+    if (!selectedVehicleId) { setTripStartTs(null); return }
+    const tripId = feed?.vehicles.find((v) => v.vehicle_id === selectedVehicleId)?.trip_id
+    if (!tripId) { setTripStartTs(null); return }
+
+    const safeId = tripId.replace(/'/g, "''")
+    fetch('/api/databricks/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sql: `
+          SELECT scheduled_arrival_secs
+          FROM silver_fact_stop_schedule
+          WHERE trip_id = '${safeId}'
+          ORDER BY stop_sequence ASC
+          LIMIT 1
+        `,
+      }),
+    })
+      .then((r) => r.json())
+      .then((d: { rows?: Array<{ scheduled_arrival_secs: number }> }) => {
+        const secs = d.rows?.[0]?.scheduled_arrival_secs
+        setTripStartTs(secs != null ? fmtGtfsSecs(secs) : null)
+      })
+      .catch(() => setTripStartTs(null))
+  }, [selectedVehicleId, feed?.vehicles])
 
   // Warmup: ping Databricks on mount so the serverless warehouse starts before Step 2 fires
   useEffect(() => {
@@ -270,6 +299,7 @@ export default function LivePageClient() {
       setContentRef.current(
         <VehicleDetailPanel
           vehicle={selectedVehicle}
+          tripStartTs={tripStartTs}
           onBack={() => setSelectedVehicleId(null)}
         />
       )
@@ -284,7 +314,7 @@ export default function LivePageClient() {
         />
       )
     }
-  }, [routes, selectedRouteId, routesLoading, routeNamesLoading, selectedVehicle])
+  }, [routes, selectedRouteId, routesLoading, routeNamesLoading, selectedVehicle, tripStartTs])
 
   return (
     <div className="flex flex-col h-full relative">
@@ -365,29 +395,30 @@ export default function LivePageClient() {
   )
 }
 
-// GTFS start_time is "HH:MM:SS" in Phoenix local (24h, may exceed 24:00 for post-midnight trips)
-function fmtStartTime(t: string | null): string | null {
-  if (!t) return null
-  const parts = t.split(':').map(Number)
-  if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) return null
-  const [h, m] = parts
+// GTFS scheduled_arrival_secs (seconds since Phoenix midnight) → "H:MM AM/PM"
+// Handles >86400s values (trips that cross midnight in GTFS notation)
+function fmtGtfsSecs(secs: number): string {
+  const h = Math.floor(secs / 3600) % 24
+  const m = Math.floor((secs % 3600) / 60)
   const h12 = h % 12 || 12
-  const ampm = h % 24 < 12 ? 'AM' : 'PM'
+  const ampm = h < 12 ? 'AM' : 'PM'
   return `${h12}:${String(m).padStart(2, '0')} ${ampm}`
 }
 
 // ── Vehicle detail panel ───────────────────────────────────────────────────────
 
-function VehicleDetailPanel({ vehicle, onBack }: { vehicle: LiveVehicle; onBack: () => void }) {
+function VehicleDetailPanel({ vehicle, tripStartTs, onBack }: {
+  vehicle: LiveVehicle
+  tripStartTs: string | null
+  onBack: () => void
+}) {
   const color = OTP_COLOR[vehicle.otp_status]
   const speedMph = vehicle.speed_mps != null ? (vehicle.speed_mps * 2.237).toFixed(0) : null
-  // Prefer formatted start time; fall back to raw trip_id if feed doesn't include startTime
-  const startLabel = fmtStartTime(vehicle.start_time) ?? vehicle.trip_id ?? '—'
 
   const rows: [string, string][] = [
     ['Route', vehicle.route_id  ?? '—'],
     ['To',    vehicle.headsign  ?? '—'],
-    ['Start', startLabel],
+    ['Start', tripStartTs ?? '…'],   // '…' while Databricks query is in flight
     ['Speed', speedMph ? `${speedMph} mph` : '—'],
   ]
 

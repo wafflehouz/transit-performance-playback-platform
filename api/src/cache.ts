@@ -17,7 +17,6 @@ export interface VehiclePosition {
   trip_id: string | null
   route_id: string | null
   direction_id: number | null
-  start_time: string | null     // GTFS-RT TripDescriptor.start_time — "HH:MM:SS" local
   lat: number
   lon: number
   bearing: number | null
@@ -65,7 +64,7 @@ interface GtfsRtEntity {
   id?: string
   vehicle?: {
     vehicle?: { id?: string; label?: string }
-    trip?: { tripId?: string; routeId?: string; directionId?: number; startTime?: string }
+    trip?: { tripId?: string; routeId?: string; directionId?: number }
     position?: { latitude?: number; longitude?: number; bearing?: number; speed?: number }
     timestamp?: string | number
   }
@@ -95,7 +94,6 @@ function parseVP(data: GtfsRtFeed): Map<string, Omit<VehiclePosition, 'delay_sec
       trip_id: veh.trip.tripId ?? null,
       route_id: veh.trip.routeId ?? null,
       direction_id: veh.trip.directionId ?? null,
-      start_time: veh.trip.startTime ?? null,
       lat: veh.position.latitude,
       lon: veh.position.longitude,
       bearing: veh.position.bearing ?? null,
