@@ -111,7 +111,7 @@ BRONZE_RETENTION_DAYS = 90     # 90 days: covers 28-day baseline window with mar
 SILVER_RETENTION_DAYS = 365
 GOLD_RETENTION_DAYS   = 365
 
-POLL_INTERVAL_SECONDS       = 60    # target cadence for pollers
+POLL_INTERVAL_SECONDS       = 20    # target cadence for pollers; matches Mecatran's ~23s VP update frequency
 VP_DOWNSAMPLE_SECONDS       = 30    # keep at most 1 VP row per vehicle per this window
 VP_STOP_RADIUS_METERS       = 40    # haversine radius to match VP point to a stop
 VP_STATIONARY_THRESHOLD_MPS = 1.0   # speed below this = vehicle considered stationary
