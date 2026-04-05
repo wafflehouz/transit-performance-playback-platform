@@ -370,14 +370,11 @@ export default function LivePageClient() {
 function VehicleDetailPanel({ vehicle, onBack }: { vehicle: LiveVehicle; onBack: () => void }) {
   const color = OTP_COLOR[vehicle.otp_status]
   const speedMph = vehicle.speed_mps != null ? (vehicle.speed_mps * 2.237).toFixed(0) : null
-  const dirLabel = vehicle.direction_id === 0 ? 'Outbound' : vehicle.direction_id === 1 ? 'Inbound' : '—'
-
   const rows: [string, string][] = [
-    ['Route',     vehicle.route_id      ?? '—'],
-    ['Direction', dirLabel],
-    ['To',        vehicle.headsign      ?? '—'],
-    ['Trip',      vehicle.trip_id       ?? '—'],
-    ['Speed',     speedMph ? `${speedMph} mph` : '—'],
+    ['Route', vehicle.route_id  ?? '—'],
+    ['To',    vehicle.headsign  ?? '—'],
+    ['Trip',  vehicle.trip_id   ?? '—'],
+    ['Speed', speedMph ? `${speedMph} mph` : '—'],
   ]
 
   return (
