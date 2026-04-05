@@ -276,18 +276,32 @@ export default function LiveMap({ vehicles, fetchedAtMs, routeStops, routeColors
           },
         }, 'veh-circle')  // insert below main circle so it expands outward from behind
 
-        // Solid white selection ring — persistent outline above the main circle
+        // Brightened circle overlay — redraws the selected vehicle at full opacity
+        // on top of the base veh-circle layer (which renders at 0.88)
+        map.addLayer({
+          id: 'veh-selected-circle',
+          type: 'circle',
+          source: 'selected-vehicle',
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 8, 12, 12, 15, 16],
+            'circle-color': ['get', 'color'],
+            'circle-opacity': 1.0,
+          },
+        }, 'veh-bearing')  // insert below bearing arrows
+
+        // Inset white ring — stroke radius = circle-radius minus stroke-width
+        // so the stroke falls entirely inside the vehicle circle (no gap, no overlap)
         map.addLayer({
           id: 'veh-selected-ring',
           type: 'circle',
           source: 'selected-vehicle',
           paint: {
-            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 11, 12, 15, 15, 20],
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 6, 12, 10, 15, 14],
             'circle-color': 'transparent',
             'circle-opacity': 0,
-            'circle-stroke-width': 2.5,
-            'circle-stroke-color': '#ffffff',
-            'circle-stroke-opacity': 0.95,
+            'circle-stroke-width': 2,
+            'circle-stroke-color': 'rgba(255,255,255,0.9)',
+            'circle-stroke-opacity': 1,
           },
         }, 'veh-bearing')  // insert below bearing arrows so arrows remain on top
 
