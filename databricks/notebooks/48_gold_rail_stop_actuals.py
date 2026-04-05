@@ -94,6 +94,8 @@ vp_rail = (
         "direction_id",
         F.col("current_stop_sequence").alias("stop_sequence"),
         F.col("stop_id"),
+        F.col("lat"),          # vehicle GPS lat — used for proximity filter in Step 2
+        F.col("lon"),          # vehicle GPS lon — used for proximity filter in Step 2
         F.col("vehicle_ts"),   # precise vehicle clock timestamp
     )
 )
@@ -175,7 +177,7 @@ first_ping = (
     vp_with_dist
     .withColumn("rn", F.row_number().over(w_arrival))
     .filter(F.col("rn") == 1)
-    .drop("rn", "_near_stop")
+    .drop("rn", "_near_stop", "lat", "lon")
     .withColumnRenamed("vehicle_ts", "actual_arrival_ts")
 )
 
