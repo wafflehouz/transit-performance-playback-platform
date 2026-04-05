@@ -271,6 +271,35 @@ actuals = (
             (F.unix_timestamp("actual_arrival_ts") - F.unix_timestamp("scheduled_arrival_ts")).cast("int")
         )
     )
+    # Post-hoc midnight correction: the anchor-date fix above handles GTFS >24:00 times
+    # (scheduled_arrival_secs > 86400). But late-night trips where the train runs past
+    # Phoenix midnight can also produce ~-86400s delays even when scheduled_arrival_secs
+    # < 86400 (e.g., 23:50 stop = 85800s; train arrives 00:15 next day; VP service_date
+    # is day N+1; anchor uses day N+1, placing scheduled time one day in the future).
+    # A delay < -43200s (-12 hours) is operationally impossible → add 86400s to correct.
+    # Similarly, a delay > +43200s would be a positive anchor error → subtract 86400s.
+    .withColumn(
+        "arrival_delay_seconds",
+        F.when(
+            F.col("arrival_delay_seconds") < -43200,
+            (F.col("arrival_delay_seconds") + 86400).cast("int")
+        ).when(
+            F.col("arrival_delay_seconds") > 43200,
+            (F.col("arrival_delay_seconds") - 86400).cast("int")
+        ).otherwise(F.col("arrival_delay_seconds"))
+    )
+    .withColumn(
+        "scheduled_arrival_ts",
+        F.when(
+            F.col("arrival_delay_seconds").isNotNull()
+            & (F.unix_timestamp("actual_arrival_ts") - F.unix_timestamp("scheduled_arrival_ts") < -43200),
+            F.to_timestamp(F.unix_timestamp("scheduled_arrival_ts") - 86400)
+        ).when(
+            F.col("arrival_delay_seconds").isNotNull()
+            & (F.unix_timestamp("actual_arrival_ts") - F.unix_timestamp("scheduled_arrival_ts") > 43200),
+            F.to_timestamp(F.unix_timestamp("scheduled_arrival_ts") + 86400)
+        ).otherwise(F.col("scheduled_arrival_ts"))
+    )
     .select(
         "service_date",
         "trip_id",
