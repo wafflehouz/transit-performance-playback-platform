@@ -1,10 +1,12 @@
 // ── GPS Playback queries ───────────────────────────────────────────────────────
 //
 // Sources:
-//   gold_trip_path_fact   — VP breadcrumb trail per trip (partitioned by service_date)
-//   gold_stop_dwell_fact  — scheduled vs actual arrivals per stop-visit
-//   silver_dim_trip       — route_id, direction_id, trip_headsign per trip
-//   silver_dim_stop       — stop_name, lat, lon
+//   gold_trip_path_fact      — VP breadcrumb trail per trip (partitioned by service_date)
+//   gold_stop_dwell_fact     — scheduled vs actual arrivals per stop-visit
+//   gold_rail_stop_actuals   — sub-minute VP-derived actuals for rail routes A/B/S
+//                              (preferred over gold_stop_dwell_fact for rail via COALESCE)
+//   silver_dim_trip          — route_id, direction_id, trip_headsign per trip
+//   silver_dim_stop          — stop_name, lat, lon
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Trips that have path data for a given route + service date
@@ -84,14 +86,14 @@ export function playbackStopsSql(tripId: string) {
   return `
     SELECT
       f.stop_id,
-      COALESCE(s.stop_name, f.stop_id)  AS stop_name,
+      COALESCE(s.stop_name, f.stop_id)                       AS stop_name,
       f.stop_sequence,
       s.lat,
       s.lon,
       f.scheduled_arrival_ts,
-      f.actual_arrival_ts,
-      f.arrival_delay_seconds,
-      COALESCE(f.pickup_type, 0)         AS pickup_type,
+      COALESCE(r.actual_arrival_ts,     f.actual_arrival_ts)     AS actual_arrival_ts,
+      COALESCE(r.arrival_delay_seconds, f.arrival_delay_seconds) AS arrival_delay_seconds,
+      COALESCE(f.pickup_type, 0)                             AS pickup_type,
       d.dwell_seconds
     FROM gold_stop_dwell_fact f
     LEFT JOIN silver_dim_stop s ON f.stop_id = s.stop_id
@@ -99,6 +101,10 @@ export function playbackStopsSql(tripId: string) {
       ON d.service_date = f.service_date
      AND d.trip_id = f.trip_id
      AND d.stop_sequence = f.stop_sequence
+    LEFT JOIN gold_rail_stop_actuals r
+      ON r.service_date = f.service_date
+     AND r.trip_id = f.trip_id
+     AND r.stop_sequence = f.stop_sequence
     WHERE f.service_date = :serviceDate
       AND f.trip_id = '${id}'
     ORDER BY f.stop_sequence
