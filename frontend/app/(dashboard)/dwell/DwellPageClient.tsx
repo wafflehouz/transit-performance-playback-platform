@@ -93,12 +93,14 @@ export default function DwellPageClient() {
 
   const [preset, setPreset] = useState<DatePreset>('7d')
   const [filters, setFilters] = useState<DwellFilterState>(() => {
-    const scope = searchParams.get('scope')
-    const group = searchParams.get('group')
-    const routeId = searchParams.get('routeId')
-    const base = { ...resolveDates('7d'), direction: 'both' as const, timepointOnly: false, excludeTerminals: false }
-    if (scope === 'group' && group)    return { ...base, mode: 'group',  groupName: group,  routeId: null }
-    if (scope === 'single' && routeId) return { ...base, mode: 'single', routeId,           groupName: null }
+    const scope            = searchParams.get('scope')
+    const group            = searchParams.get('group')
+    const routeId          = searchParams.get('routeId')
+    const timepointOnly    = searchParams.get('timepointOnly') === 'true'
+    const excludeTerminals = searchParams.get('excludeTerminals') === 'true'
+    const base = { ...resolveDates('7d'), direction: 'both' as const, timepointOnly, excludeTerminals }
+    if (scope === 'group' && group)    return { ...base, mode: 'group',  groupName: group, routeId: null }
+    if (scope === 'single' && routeId) return { ...base, mode: 'single', routeId,          groupName: null }
     return { ...base, mode: 'all', groupName: null, routeId: null }
   })
   const [activeTab, setActiveTab] = useState<TabId>('summary')
@@ -132,11 +134,13 @@ export default function DwellPageClient() {
   // Sync filter selection → nav context so sidebar links carry state
   useEffect(() => {
     setNavFilter({
-      scope:     filters.mode === 'all' ? null : filters.mode as 'group' | 'single',
-      groupName: filters.groupName,
-      routeId:   filters.routeId,
+      scope:            filters.mode === 'all' ? null : filters.mode as 'group' | 'single',
+      groupName:        filters.groupName,
+      routeId:          filters.routeId,
+      timepointOnly:    filters.timepointOnly,
+      excludeTerminals: filters.excludeTerminals,
     })
-  }, [filters.mode, filters.groupName, filters.routeId, setNavFilter])
+  }, [filters.mode, filters.groupName, filters.routeId, filters.timepointOnly, filters.excludeTerminals, setNavFilter])
 
   function handlePresetChange(p: DatePreset) {
     setPreset(p)

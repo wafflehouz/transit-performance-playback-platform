@@ -11,19 +11,26 @@ import type { User } from '@supabase/supabase-js'
 // Build a context-aware href so navigating between dashboards carries
 // the current group/route selection as URL params.
 function buildNavHref(base: string, f: NavFilter): string {
-  // Trip Playback is single-route only
+  const p = new URLSearchParams()
+
   if (base === '/trip') {
-    if (f.scope === 'single' && f.routeId)
-      return `/trip?routeId=${encodeURIComponent(f.routeId)}`
-    return base
+    if (f.scope === 'single' && f.routeId) p.set('routeId', f.routeId)
+    if (f.timepointOnly) p.set('timepointOnly', 'true')
+    const qs = p.toString()
+    return qs ? `${base}?${qs}` : base
   }
-  // OTP and Dwell support group + single scopes
+
   if (base === '/otp' || base === '/dwell') {
     if (f.scope === 'group' && f.groupName)
-      return `${base}?scope=group&group=${encodeURIComponent(f.groupName)}`
-    if (f.scope === 'single' && f.routeId)
-      return `${base}?scope=single&routeId=${encodeURIComponent(f.routeId)}`
+      { p.set('scope', 'group'); p.set('group', f.groupName) }
+    else if (f.scope === 'single' && f.routeId)
+      { p.set('scope', 'single'); p.set('routeId', f.routeId) }
+    if (f.timepointOnly)    p.set('timepointOnly', 'true')
+    if (f.excludeTerminals) p.set('excludeTerminals', 'true')
+    const qs = p.toString()
+    return qs ? `${base}?${qs}` : base
   }
+
   return base
 }
 

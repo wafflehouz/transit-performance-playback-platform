@@ -120,7 +120,7 @@ export default function PlaybackPageClient() {
     startDate: initDate ?? todayMinus1(),
     endDate:   initDate ?? todayMinus1(),
     direction: initDirectionId != null ? (Number(initDirectionId) as 0 | 1) : 'both',
-    timepointOnly: false,
+    timepointOnly: searchParams.get('timepointOnly') === 'true',
   }))
   const [preset, setPreset] = useState<DatePreset>('1d')
 

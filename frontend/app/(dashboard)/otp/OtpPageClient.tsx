@@ -78,12 +78,13 @@ export default function OtpPageClient() {
 
   const [preset, setPreset] = useState<DatePreset>('7d')
   const [filters, setFilters] = useState<OtpFilterState>(() => {
-    const scope = searchParams.get('scope')
-    const group = searchParams.get('group')
-    const routeId = searchParams.get('routeId')
-    const base = { ...resolveDates('7d'), direction: 'both' as const, timepointOnly: false }
-    if (scope === 'group' && group)   return { ...base, mode: 'group',  groupName: group,  routeId: null }
-    if (scope === 'single' && routeId) return { ...base, mode: 'single', routeId,           groupName: null }
+    const scope          = searchParams.get('scope')
+    const group          = searchParams.get('group')
+    const routeId        = searchParams.get('routeId')
+    const timepointOnly  = searchParams.get('timepointOnly') === 'true'
+    const base = { ...resolveDates('7d'), direction: 'both' as const, timepointOnly }
+    if (scope === 'group' && group)    return { ...base, mode: 'group',  groupName: group, routeId: null }
+    if (scope === 'single' && routeId) return { ...base, mode: 'single', routeId,          groupName: null }
     return { ...base, mode: 'all', groupName: null, routeId: null }
   })
   const [activeTab, setActiveTab] = useState<TabId>('summary')
@@ -97,7 +98,7 @@ export default function OtpPageClient() {
   const [stopsData, setStopsData] = useState<any[]>([])
   const [histData, setHistData] = useState<any[]>([])
   const [headsigns, setHeadsigns] = useState<Record<number, string>>({})
-  const [excludeTerminals, setExcludeTerminals] = useState(false)
+  const [excludeTerminals, setExcludeTerminals] = useState(() => searchParams.get('excludeTerminals') === 'true')
   const [scheduleDate, setScheduleDate] = useState(() => {
     const d = new Date()
     d.setDate(d.getDate() - 1)
@@ -124,11 +125,13 @@ export default function OtpPageClient() {
   // Sync filter selection → nav context so sidebar links carry state
   useEffect(() => {
     setNavFilter({
-      scope:     filters.mode === 'all' ? null : filters.mode as 'group' | 'single',
-      groupName: filters.groupName,
-      routeId:   filters.routeId,
+      scope:            filters.mode === 'all' ? null : filters.mode as 'group' | 'single',
+      groupName:        filters.groupName,
+      routeId:          filters.routeId,
+      timepointOnly:    filters.timepointOnly,
+      excludeTerminals,
     })
-  }, [filters.mode, filters.groupName, filters.routeId, setNavFilter])
+  }, [filters.mode, filters.groupName, filters.routeId, filters.timepointOnly, excludeTerminals, setNavFilter])
 
   // When preset changes, update the date range in filters
   function handlePresetChange(p: DatePreset) {

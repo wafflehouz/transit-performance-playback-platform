@@ -6,6 +6,8 @@ export interface NavFilter {
   scope: 'group' | 'single' | null
   groupName: string | null
   routeId: string | null
+  timepointOnly?: boolean
+  excludeTerminals?: boolean
 }
 
 interface NavContextValue {
