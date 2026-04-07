@@ -20,15 +20,20 @@ export interface OtpFilterState {
 // Preset date ranges (relative to yesterday, since gold runs nightly)
 export type DatePreset = '1d' | '7d' | '14d' | '28d'
 
+function toYMD(d: Date): string {
+  // Use local date components — toISOString() is UTC and rolls over at 5 PM Phoenix
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 export function resolveDates(preset: DatePreset): { startDate: string; endDate: string } {
   const end = new Date()
-  end.setDate(end.getDate() - 1) // yesterday
+  end.setDate(end.getDate() - 1) // yesterday in local time
   const start = new Date(end)
   const days = preset === '1d' ? 0 : preset === '7d' ? 6 : preset === '14d' ? 13 : 27
   start.setDate(start.getDate() - days)
   return {
-    endDate: end.toISOString().split('T')[0],
-    startDate: start.toISOString().split('T')[0],
+    endDate:   toYMD(end),
+    startDate: toYMD(start),
   }
 }
 
