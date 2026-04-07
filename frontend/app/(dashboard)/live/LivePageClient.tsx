@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 const RENDER_API = process.env.NEXT_PUBLIC_RENDER_API_URL ?? 'http://localhost:3001'
 const REFRESH_MS = 30_000
 
-type LiveScope = 'all' | 'group' | 'single'
+type LiveScope = 'group' | 'single'
 
 // Valley Metro display colors
 const VM_NAME_COLORS: Record<string, string> = {
@@ -72,7 +72,7 @@ export default function LivePageClient() {
   setContentRef.current = setContent
 
   // ── Scope ─────────────────────────────────────────────────────────────────
-  const [scope, setScope] = useState<LiveScope>('all')
+  const [scope, setScope] = useState<LiveScope>('group')
 
   // ── Routes metadata (from Render + Databricks) ────────────────────────────
   const [routeIds, setRouteIds]             = useState<string[]>([])
@@ -117,7 +117,6 @@ export default function LivePageClient() {
   }, [scope, groupRouteIds, selectedRouteId])
 
   // ── Route IDs to fetch vehicles for ───────────────────────────────────────
-  // (all scope uses /vehicles/all endpoint directly, handled in fetchVehicles)
   const activeRouteIds = useMemo(() => {
     if (scope === 'group') return groupRouteIds
     if (scope === 'single') return selectedRouteId ? [selectedRouteId] : []
@@ -302,15 +301,10 @@ export default function LivePageClient() {
   }, [scope, selectedRouteId])
 
   // ── Fetch vehicles ────────────────────────────────────────────────────────
-  const fetchVehicles = useCallback(async (currentScope: LiveScope, ids: string[]) => {
+  const fetchVehicles = useCallback(async (_scope: LiveScope, ids: string[]) => {
     try {
-      let url: string
-      if (currentScope === 'all') {
-        url = `${RENDER_API}/vehicles/all`
-      } else {
-        if (!ids.length) return
-        url = `${RENDER_API}/vehicles/multi?route_ids=${ids.join(',')}`
-      }
+      if (!ids.length) return
+      const url = `${RENDER_API}/vehicles/multi?route_ids=${ids.join(',')}`
       const res = await fetch(url)
       if (!res.ok) throw new Error(`Feed error: ${res.status}`)
       const data: FeedResponse = await res.json()
@@ -326,7 +320,7 @@ export default function LivePageClient() {
     if (timerRef.current) clearInterval(timerRef.current)
     setFeed(null)
     setSelectedVehicleId(null)
-    if (scope !== 'all' && !activeRouteIds.length) return
+    if (!activeRouteIds.length) return
     fetchVehicles(scope, activeRouteIds)
     timerRef.current = setInterval(() => fetchVehicles(scope, activeRouteIds), REFRESH_MS)
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
@@ -377,7 +371,6 @@ export default function LivePageClient() {
 
   // ── Stats overlay label ───────────────────────────────────────────────────
   const statsLabel = useMemo(() => {
-    if (scope === 'all') return 'All Routes'
     if (scope === 'group') return selectedGroupName ?? null
     if (scope === 'single' && selectedRouteId) {
       return routeNames.get(selectedRouteId) ?? `Route ${selectedRouteId}`
@@ -592,7 +585,6 @@ function LiveFilterPanel({
   onSelectRoute: (id: string | null) => void
 }) {
   const modeLabels: Record<LiveScope, string> = {
-    all:    'All Routes',
     group:  'Route Group',
     single: 'Single Route',
   }
@@ -601,7 +593,7 @@ function LiveFilterPanel({
     <>
       <FilterSection label="Scope">
         <div className="flex flex-col gap-0.5">
-          {(['all', 'group', 'single'] as LiveScope[]).map((s) => (
+          {(['group', 'single'] as LiveScope[]).map((s) => (
             <button
               key={s}
               onClick={() => onScopeChange(s)}
