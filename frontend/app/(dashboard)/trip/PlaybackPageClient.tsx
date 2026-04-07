@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useFilterPanel } from '@/lib/filter-panel-context'
+import { useNav } from '@/lib/nav-context'
 import RouteFilterPanel, {
   type OtpFilterState,
   type DatePreset,
@@ -105,6 +106,8 @@ export default function PlaybackPageClient() {
   const setContentRef = useRef(setContent)
   setContentRef.current = setContent
 
+  const { setNavFilter } = useNav()
+
   // Deep-link params from anomaly drawer (routeId, serviceDate, directionId, timeBucket)
   const searchParams = useSearchParams()
   const initRouteId    = searchParams.get('routeId')
@@ -153,6 +156,17 @@ export default function PlaybackPageClient() {
   useEffect(() => { isPlayingRef.current  = isPlaying  }, [isPlaying])
   useEffect(() => { playbackMsRef.current = playbackMs }, [playbackMs])
   useEffect(() => { speedRef.current      = speed      }, [speed])
+
+  // Sync route/stop-type selection → nav context so returning to OTP/Dwell
+  // reflects any route change made inside Playback
+  useEffect(() => {
+    setNavFilter({
+      scope:         filters.routeId ? 'single' : null,
+      groupName:     null,
+      routeId:       filters.routeId,
+      timepointOnly: filters.timepointOnly,
+    })
+  }, [filters.routeId, filters.timepointOnly, setNavFilter])
 
   const activeRouteId = filters.mode === 'single' ? filters.routeId : null
   const selectedRoute = routes.find((r) => r.route_id === activeRouteId)

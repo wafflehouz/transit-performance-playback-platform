@@ -91,14 +91,18 @@ export default function DwellPageClient() {
   const { setNavFilter } = useNav()
   const searchParams = useSearchParams()
 
-  const [preset, setPreset] = useState<DatePreset>('7d')
+  const VALID_PRESETS: DatePreset[] = ['1d', '7d', '14d', '28d']
+  const initPreset = (VALID_PRESETS.includes(searchParams.get('preset') as DatePreset)
+    ? searchParams.get('preset') as DatePreset
+    : '7d')
+  const [preset, setPreset] = useState<DatePreset>(initPreset)
   const [filters, setFilters] = useState<DwellFilterState>(() => {
     const scope            = searchParams.get('scope')
     const group            = searchParams.get('group')
     const routeId          = searchParams.get('routeId')
     const timepointOnly    = searchParams.get('timepointOnly') === 'true'
     const excludeTerminals = searchParams.get('excludeTerminals') === 'true'
-    const base = { ...resolveDates('7d'), direction: 'both' as const, timepointOnly, excludeTerminals }
+    const base = { ...resolveDates(initPreset), direction: 'both' as const, timepointOnly, excludeTerminals }
     if (scope === 'group' && group)    return { ...base, mode: 'group',  groupName: group, routeId: null }
     if (scope === 'single' && routeId) return { ...base, mode: 'single', routeId,          groupName: null }
     return { ...base, mode: 'all', groupName: null, routeId: null }
@@ -139,8 +143,9 @@ export default function DwellPageClient() {
       routeId:          filters.routeId,
       timepointOnly:    filters.timepointOnly,
       excludeTerminals: filters.excludeTerminals,
+      preset,
     })
-  }, [filters.mode, filters.groupName, filters.routeId, filters.timepointOnly, filters.excludeTerminals, setNavFilter])
+  }, [filters.mode, filters.groupName, filters.routeId, filters.timepointOnly, filters.excludeTerminals, preset, setNavFilter])
 
   function handlePresetChange(p: DatePreset) {
     setPreset(p)

@@ -8,6 +8,7 @@ export interface NavFilter {
   routeId: string | null
   timepointOnly?: boolean
   excludeTerminals?: boolean
+  preset?: string   // DatePreset — carried between OTP and Dwell
 }
 
 interface NavContextValue {

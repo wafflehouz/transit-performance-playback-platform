@@ -76,13 +76,17 @@ export default function OtpPageClient() {
   const { setNavFilter } = useNav()
   const searchParams = useSearchParams()
 
-  const [preset, setPreset] = useState<DatePreset>('7d')
+  const VALID_PRESETS: DatePreset[] = ['1d', '7d', '14d', '28d']
+  const initPreset = (VALID_PRESETS.includes(searchParams.get('preset') as DatePreset)
+    ? searchParams.get('preset') as DatePreset
+    : '7d')
+  const [preset, setPreset] = useState<DatePreset>(initPreset)
   const [filters, setFilters] = useState<OtpFilterState>(() => {
     const scope          = searchParams.get('scope')
     const group          = searchParams.get('group')
     const routeId        = searchParams.get('routeId')
     const timepointOnly  = searchParams.get('timepointOnly') === 'true'
-    const base = { ...resolveDates('7d'), direction: 'both' as const, timepointOnly }
+    const base = { ...resolveDates(initPreset), direction: 'both' as const, timepointOnly }
     if (scope === 'group' && group)    return { ...base, mode: 'group',  groupName: group, routeId: null }
     if (scope === 'single' && routeId) return { ...base, mode: 'single', routeId,          groupName: null }
     return { ...base, mode: 'all', groupName: null, routeId: null }
@@ -130,8 +134,9 @@ export default function OtpPageClient() {
       routeId:          filters.routeId,
       timepointOnly:    filters.timepointOnly,
       excludeTerminals,
+      preset,
     })
-  }, [filters.mode, filters.groupName, filters.routeId, filters.timepointOnly, excludeTerminals, setNavFilter])
+  }, [filters.mode, filters.groupName, filters.routeId, filters.timepointOnly, excludeTerminals, preset, setNavFilter])
 
   // When preset changes, update the date range in filters
   function handlePresetChange(p: DatePreset) {

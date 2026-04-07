@@ -27,6 +27,7 @@ function buildNavHref(base: string, f: NavFilter): string {
       { p.set('scope', 'single'); p.set('routeId', f.routeId) }
     if (f.timepointOnly)    p.set('timepointOnly', 'true')
     if (f.excludeTerminals) p.set('excludeTerminals', 'true')
+    if (f.preset && f.preset !== '7d') p.set('preset', f.preset)
     const qs = p.toString()
     return qs ? `${base}?${qs}` : base
   }
