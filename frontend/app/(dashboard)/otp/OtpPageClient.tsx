@@ -1,12 +1,14 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   AreaChart, Area, BarChart, Bar,
   PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts'
 import { useFilterPanel } from '@/lib/filter-panel-context'
+import { useNav } from '@/lib/nav-context'
 import RouteFilterPanel, {
   type OtpFilterState,
   type DatePreset,
@@ -71,15 +73,19 @@ export default function OtpPageClient() {
   const setContentRef = useRef(setContent)
   setContentRef.current = setContent
 
+  const { setNavFilter } = useNav()
+  const searchParams = useSearchParams()
+
   const [preset, setPreset] = useState<DatePreset>('7d')
-  const [filters, setFilters] = useState<OtpFilterState>(() => ({
-    mode: 'all',
-    groupName: null,
-    routeId: null,
-    ...resolveDates('7d'),
-    direction: 'both',
-    timepointOnly: false,
-  }))
+  const [filters, setFilters] = useState<OtpFilterState>(() => {
+    const scope = searchParams.get('scope')
+    const group = searchParams.get('group')
+    const routeId = searchParams.get('routeId')
+    const base = { ...resolveDates('7d'), direction: 'both' as const, timepointOnly: false }
+    if (scope === 'group' && group)   return { ...base, mode: 'group',  groupName: group,  routeId: null }
+    if (scope === 'single' && routeId) return { ...base, mode: 'single', routeId,           groupName: null }
+    return { ...base, mode: 'all', groupName: null, routeId: null }
+  })
   const [activeTab, setActiveTab] = useState<TabId>('summary')
 
   const [routes, setRoutes] = useState<DimRoute[]>([])
@@ -114,6 +120,15 @@ export default function OtpPageClient() {
       .then((rows: any[]) => setGroups(rows.map((r) => r.group_name)))
       .catch(() => {})
   }, [])
+
+  // Sync filter selection → nav context so sidebar links carry state
+  useEffect(() => {
+    setNavFilter({
+      scope:     filters.mode === 'all' ? null : filters.mode as 'group' | 'single',
+      groupName: filters.groupName,
+      routeId:   filters.routeId,
+    })
+  }, [filters.mode, filters.groupName, filters.routeId, setNavFilter])
 
   // When preset changes, update the date range in filters
   function handlePresetChange(p: DatePreset) {

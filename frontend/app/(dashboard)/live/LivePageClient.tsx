@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useFilterPanel } from '@/lib/filter-panel-context'
+import { useNav } from '@/lib/nav-context'
 import { FilterSection } from '@/components/ui/FilterControls'
 import LiveMap, { type LiveVehicle, type OtpStatus } from '@/components/map/LiveMap'
 import type { DimRoute, RouteStop } from '@/types'
@@ -70,6 +71,8 @@ export default function LivePageClient() {
   const { setContent } = useFilterPanel()
   const setContentRef = useRef(setContent)
   setContentRef.current = setContent
+
+  const { setNavFilter } = useNav()
 
   // ── Scope ─────────────────────────────────────────────────────────────────
   const [scope, setScope] = useState<LiveScope>('group')
@@ -352,6 +355,15 @@ export default function LivePageClient() {
       })
       .catch(() => setTripStartTs(null))
   }, [selectedVehicleId, feed?.vehicles])
+
+  // ── Sync selection → nav context so sidebar links carry state ────────────
+  useEffect(() => {
+    setNavFilter({
+      scope,
+      groupName: scope === 'group' ? selectedGroupName : null,
+      routeId:   scope === 'single' ? selectedRouteId : null,
+    })
+  }, [scope, selectedGroupName, selectedRouteId, setNavFilter])
 
   // ── Scope change handler ──────────────────────────────────────────────────
   function handleScopeChange(s: LiveScope) {

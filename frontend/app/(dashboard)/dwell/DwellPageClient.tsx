@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell,
 } from 'recharts'
 import { useFilterPanel } from '@/lib/filter-panel-context'
+import { useNav } from '@/lib/nav-context'
 import RouteFilterPanel, {
   type OtpFilterState,
   type DatePreset,
@@ -86,16 +88,19 @@ export default function DwellPageClient() {
   const setContentRef = useRef(setContent)
   setContentRef.current = setContent
 
+  const { setNavFilter } = useNav()
+  const searchParams = useSearchParams()
+
   const [preset, setPreset] = useState<DatePreset>('7d')
-  const [filters, setFilters] = useState<DwellFilterState>(() => ({
-    mode: 'all',
-    groupName: null,
-    routeId: null,
-    ...resolveDates('7d'),
-    direction: 'both',
-    timepointOnly: false,
-    excludeTerminals: false,
-  }))
+  const [filters, setFilters] = useState<DwellFilterState>(() => {
+    const scope = searchParams.get('scope')
+    const group = searchParams.get('group')
+    const routeId = searchParams.get('routeId')
+    const base = { ...resolveDates('7d'), direction: 'both' as const, timepointOnly: false, excludeTerminals: false }
+    if (scope === 'group' && group)    return { ...base, mode: 'group',  groupName: group,  routeId: null }
+    if (scope === 'single' && routeId) return { ...base, mode: 'single', routeId,           groupName: null }
+    return { ...base, mode: 'all', groupName: null, routeId: null }
+  })
   const [activeTab, setActiveTab] = useState<TabId>('summary')
 
   const [routes, setRoutes] = useState<DimRoute[]>([])
@@ -123,6 +128,15 @@ export default function DwellPageClient() {
       .then((rows: any[]) => setGroups(rows.map((r) => r.group_name)))
       .catch(() => {})
   }, [])
+
+  // Sync filter selection → nav context so sidebar links carry state
+  useEffect(() => {
+    setNavFilter({
+      scope:     filters.mode === 'all' ? null : filters.mode as 'group' | 'single',
+      groupName: filters.groupName,
+      routeId:   filters.routeId,
+    })
+  }, [filters.mode, filters.groupName, filters.routeId, setNavFilter])
 
   function handlePresetChange(p: DatePreset) {
     setPreset(p)

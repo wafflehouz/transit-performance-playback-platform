@@ -4,9 +4,28 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useFilterPanel } from '@/lib/filter-panel-context'
-import { useNav } from '@/lib/nav-context'
+import { useNav, type NavFilter } from '@/lib/nav-context'
 import { cn } from '@/lib/utils'
 import type { User } from '@supabase/supabase-js'
+
+// Build a context-aware href so navigating between dashboards carries
+// the current group/route selection as URL params.
+function buildNavHref(base: string, f: NavFilter): string {
+  // Trip Playback is single-route only
+  if (base === '/trip') {
+    if (f.scope === 'single' && f.routeId)
+      return `/trip?routeId=${encodeURIComponent(f.routeId)}`
+    return base
+  }
+  // OTP and Dwell support group + single scopes
+  if (base === '/otp' || base === '/dwell') {
+    if (f.scope === 'group' && f.groupName)
+      return `${base}?scope=group&group=${encodeURIComponent(f.groupName)}`
+    if (f.scope === 'single' && f.routeId)
+      return `${base}?scope=single&routeId=${encodeURIComponent(f.routeId)}`
+  }
+  return base
+}
 
 const NAV = [
   {
@@ -71,7 +90,7 @@ export default function IconNav({ user }: { user: User }) {
   const router = useRouter()
   const supabase = createClient()
   const { toggle: toggleFilter, isOpen } = useFilterPanel()
-  const { expanded, toggle: toggleNav } = useNav()
+  const { expanded, toggle: toggleNav, navFilter } = useNav()
 
   async function handleSignOut() {
     await supabase.auth.signOut()
@@ -119,10 +138,11 @@ export default function IconNav({ user }: { user: User }) {
       <nav className="flex flex-col gap-0.5 flex-1 px-2">
         {NAV.map((item) => {
           const active = pathname.startsWith(item.href)
+          const href = active ? item.href : buildNavHref(item.href, navFilter)
           return (
             <NavItem
               key={item.href}
-              href={item.href}
+              href={href}
               label={item.label}
               active={active}
               expanded={expanded}
