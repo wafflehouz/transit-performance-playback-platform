@@ -257,7 +257,9 @@ export default function OtpPageClient() {
         safe(fetchJson(summaryAllSql(f.groupName, tp, excTerminals), params)),
         safe(fetchJson(otpTrendSql(f.groupName, tp, excTerminals), params)),
         safe(fetchJson(routesTableSql(f.groupName, f.direction, tp, excTerminals), params)),
-        f.mode === 'all' ? safe(fetchJson(topDelayedYesterdaySql(null, tp, excTerminals), { startDate: yd })) : Promise.resolve([]),
+        (f.mode === 'all' || f.mode === 'group')
+          ? safe(fetchJson(topDelayedYesterdaySql(f.mode === 'group' ? f.groupName : null, tp, excTerminals), { startDate: yd, endDate: yd }))
+          : Promise.resolve([]),
       ])
       setSummaryData(summary[0] ?? null)
       setTrendData(trend)
@@ -476,7 +478,7 @@ function SummaryTab({
       </div>
 
       {/* Most Delayed Yesterday — only in All Routes mode */}
-      {mode === 'all' && topDelayed.length > 0 && (
+      {(mode === 'all' || mode === 'group') && topDelayed.length > 0 && (
         <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-800">
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Most Delayed Routes — Yesterday</h3>
