@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useFilterPanel } from '@/lib/filter-panel-context'
 import { useNav } from '@/lib/nav-context'
 import { FilterSection } from '@/components/ui/FilterControls'
@@ -73,9 +74,13 @@ export default function LivePageClient() {
   setContentRef.current = setContent
 
   const { setNavFilter } = useNav()
+  const searchParams = useSearchParams()
 
   // ── Scope ─────────────────────────────────────────────────────────────────
-  const [scope, setScope] = useState<LiveScope>('group')
+  const [scope, setScope] = useState<LiveScope>(() => {
+    const s = searchParams.get('scope')
+    return s === 'single' ? 'single' : 'group'
+  })
 
   // ── Routes metadata (from Render + Databricks) ────────────────────────────
   const [routeIds, setRouteIds]             = useState<string[]>([])
@@ -87,12 +92,12 @@ export default function LivePageClient() {
   // ── Group selection ───────────────────────────────────────────────────────
   const [groups, setGroups]                     = useState<string[]>([])
   const [groupsLoading, setGroupsLoading]       = useState(true)
-  const [selectedGroupName, setSelectedGroupName] = useState<string | null>(null)
+  const [selectedGroupName, setSelectedGroupName] = useState<string | null>(() => searchParams.get('group'))
   const [groupRouteIds, setGroupRouteIds]       = useState<string[]>([])
   const [groupRoutesLoading, setGroupRoutesLoading] = useState(false)
 
   // ── Single-route selection ────────────────────────────────────────────────
-  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null)
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(() => searchParams.get('routeId'))
 
   // ── Selected vehicle ──────────────────────────────────────────────────────
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null)

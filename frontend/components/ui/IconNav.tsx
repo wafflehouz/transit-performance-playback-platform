@@ -20,7 +20,7 @@ function buildNavHref(base: string, f: NavFilter): string {
     return qs ? `${base}?${qs}` : base
   }
 
-  if (base === '/otp' || base === '/dwell') {
+  if (base === '/otp' || base === '/dwell' || base === '/live') {
     if (f.scope === 'group' && f.groupName)
       { p.set('scope', 'group'); p.set('group', f.groupName) }
     else if (f.scope === 'single' && f.routeId)
