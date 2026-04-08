@@ -477,51 +477,6 @@ function SummaryTab({
         />
       </div>
 
-      {/* Most Delayed Yesterday — only in All Routes mode */}
-      {(mode === 'all' || mode === 'group') && topDelayed.length > 0 && (
-        <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-800">
-            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Most Delayed Routes — Yesterday</h3>
-          </div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-800">
-                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Route</th>
-                <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider" style={{ color: OTP_COLORS.onTime }}>On-Time</th>
-                <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Avg Delay</th>
-                <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider w-32">Bar</th>
-              </tr>
-            </thead>
-            <tbody>
-              {topDelayed.map((row, i) => {
-                const avgMin = toNum(row.avg_delay_min)
-                const onTime = toNum(row.on_time_pct)
-                // severity color: green < 1min, yellow < 3min, orange < 6min, red ≥ 6min
-                const delayColor = avgMin < 1 ? OTP_COLORS.onTime : avgMin < 3 ? '#facc15' : avgMin < 6 ? OTP_COLORS.late : OTP_COLORS.early
-                const barPct = Math.min(100, (avgMin / 10) * 100)
-                return (
-                  <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
-                    <td className="px-4 py-2.5">
-                      <div className="text-white font-medium text-sm">{row.route_short_name}</div>
-                      <div className="text-gray-500 text-xs truncate max-w-[200px]">{row.route_long_name}</div>
-                    </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums font-semibold" style={{ color: OTP_COLORS.onTime }}>{onTime.toFixed(1)}%</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums font-semibold" style={{ color: delayColor }}>
-                      +{avgMin.toFixed(1)}m
-                    </td>
-                    <td className="px-4 py-2.5 w-32">
-                      <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${barPct}%`, background: delayColor }} />
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
       {/* Charts row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* OTP donut */}
@@ -576,6 +531,48 @@ function SummaryTab({
           )}
         </div>
       </div>
+
+      {/* Most Delayed Yesterday — below charts */}
+      {(mode === 'all' || mode === 'group') && topDelayed.length > 0 && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-800">
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Most Delayed Routes — Yesterday</h3>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-800">
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Route</th>
+                <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider" style={{ color: OTP_COLORS.onTime }}>On-Time</th>
+                <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Avg Delay</th>
+                <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider w-32">Bar</th>
+              </tr>
+            </thead>
+            <tbody>
+              {topDelayed.map((row, i) => {
+                const avgMin = toNum(row.avg_delay_min)
+                const onTime = toNum(row.on_time_pct)
+                const delayColor = avgMin < 1 ? OTP_COLORS.onTime : avgMin < 3 ? '#facc15' : avgMin < 6 ? OTP_COLORS.late : OTP_COLORS.early
+                const barPct = Math.min(100, (avgMin / 10) * 100)
+                return (
+                  <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
+                    <td className="px-4 py-2.5">
+                      <div className="text-white font-medium text-sm">{row.route_short_name}</div>
+                      <div className="text-gray-500 text-xs truncate max-w-[200px]">{row.route_long_name}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums font-semibold" style={{ color: OTP_COLORS.onTime }}>{onTime.toFixed(1)}%</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums font-semibold" style={{ color: delayColor }}>+{avgMin.toFixed(1)}m</td>
+                    <td className="px-4 py-2.5 w-32">
+                      <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${barPct}%`, background: delayColor }} />
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
