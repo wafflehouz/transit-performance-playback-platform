@@ -102,7 +102,7 @@ export default function LoginPage() {
               Real-Time Performance<br />Insights
             </h1>
             <p className="text-gray-300 text-sm leading-relaxed max-w-xs">
-              OTP, dwell analysis, trip playback, and AI-generated weekly briefs — built for transit planners.
+              OTP, dwell analysis, trip playback, and AI-generated weekly briefs — built for transit planning and operations.
             </p>
           </div>
 
