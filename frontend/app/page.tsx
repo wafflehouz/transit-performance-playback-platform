@@ -23,7 +23,7 @@ export default function RootPage() {
       return
     }
 
-    router.replace('/dashboard')
+    router.replace('/otp')
   }, [router])
 
   return null

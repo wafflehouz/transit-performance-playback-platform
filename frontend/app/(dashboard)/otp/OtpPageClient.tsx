@@ -77,6 +77,18 @@ export default function OtpPageClient() {
   const searchParams = useSearchParams()
 
   const VALID_PRESETS: DatePreset[] = ['1d', '7d', '14d', '28d']
+
+  // Detect whether the user arrived via a URL with explicit filter params (e.g. nav
+  // cross-link). If so, URL params win over saved preferences.
+  const hasUrlParams = useRef(
+    searchParams.get('scope') !== null ||
+    searchParams.get('group') !== null ||
+    searchParams.get('routeId') !== null ||
+    searchParams.get('timepointOnly') !== null ||
+    searchParams.get('excludeTerminals') !== null ||
+    searchParams.get('preset') !== null
+  )
+
   const initPreset = (VALID_PRESETS.includes(searchParams.get('preset') as DatePreset)
     ? searchParams.get('preset') as DatePreset
     : '7d')
@@ -92,6 +104,10 @@ export default function OtpPageClient() {
     return { ...base, mode: 'all', groupName: null, routeId: null }
   })
   const [activeTab, setActiveTab] = useState<TabId>('summary')
+
+  // Save-as-default UI state
+  const [saving, setSaving] = useState(false)
+  const [savedOk, setSavedOk] = useState(false)
 
   const [routes, setRoutes] = useState<DimRoute[]>([])
   const [groups, setGroups] = useState<string[]>([])
@@ -125,6 +141,51 @@ export default function OtpPageClient() {
       .then((rows: any[]) => setGroups(rows.map((r) => r.group_name)))
       .catch(() => {})
   }, [])
+
+  // Load saved preferences on mount — only applied when no URL params were used
+  useEffect(() => {
+    if (hasUrlParams.current) return
+    fetch('/api/preferences')
+      .then((r) => r.json())
+      .then(({ otp_defaults: p }) => {
+        if (!p) return
+        const savedPreset: DatePreset = VALID_PRESETS.includes(p.preset) ? p.preset : '7d'
+        setPreset(savedPreset)
+        setExcludeTerminals(p.excludeTerminals ?? false)
+        setFilters({
+          ...resolveDates(savedPreset),
+          direction:    'both',
+          timepointOnly: p.timepointOnly ?? false,
+          mode:          p.scope === 'group' ? 'group' : p.scope === 'single' ? 'single' : 'all',
+          groupName:     p.groupName ?? null,
+          routeId:       p.routeId   ?? null,
+        })
+      })
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleSaveDefault() {
+    setSaving(true)
+    try {
+      await fetch('/api/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          otp_defaults: {
+            scope:           filters.mode,
+            groupName:       filters.groupName,
+            routeId:         filters.routeId,
+            timepointOnly:   filters.timepointOnly,
+            excludeTerminals,
+            preset,
+          },
+        }),
+      })
+      setSavedOk(true)
+      setTimeout(() => setSavedOk(false), 2500)
+    } catch {}
+    setSaving(false)
+  }
 
   // Sync filter selection → nav context so sidebar links carry state
   useEffect(() => {
@@ -210,22 +271,41 @@ export default function OtpPageClient() {
   // Inject filter panel
   const filterNode = useMemo(
     () => (
-      <RouteFilterPanel
-        filters={filters}
-        onChange={setFilters}
-        routes={routes}
-        groups={groups}
-        activePreset={preset}
-        onPresetChange={handlePresetChange}
-        excludeTerminals={excludeTerminals}
-        onExcludeTerminalsChange={setExcludeTerminals}
-        {...(activeTab === 'schedule' ? {
-          scheduleDate,
-          onScheduleDateChange: setScheduleDate,
-        } : {})}
-      />
+      <>
+        <RouteFilterPanel
+          filters={filters}
+          onChange={setFilters}
+          routes={routes}
+          groups={groups}
+          activePreset={preset}
+          onPresetChange={handlePresetChange}
+          excludeTerminals={excludeTerminals}
+          onExcludeTerminalsChange={setExcludeTerminals}
+          {...(activeTab === 'schedule' ? {
+            scheduleDate,
+            onScheduleDateChange: setScheduleDate,
+          } : {})}
+        />
+        <div className="pt-3 border-t border-gray-800">
+          <button
+            onClick={handleSaveDefault}
+            disabled={saving}
+            className={cn(
+              'w-full py-2 rounded-lg text-sm font-medium transition-colors',
+              savedOk
+                ? 'bg-green-700/40 text-green-300 border border-green-700/50'
+                : saving
+                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                : 'bg-blue-600 hover:bg-blue-500 text-white'
+            )}
+          >
+            {savedOk ? '✓ Saved as default' : saving ? 'Saving…' : 'Save as Default'}
+          </button>
+          <p className="text-xs text-gray-600 mt-1.5 text-center">Synced to your account</p>
+        </div>
+      </>
     ),
-    [filters, routes, groups, preset, excludeTerminals, activeTab, scheduleDate] // eslint-disable-line react-hooks/exhaustive-deps
+    [filters, routes, groups, preset, excludeTerminals, activeTab, scheduleDate, saving, savedOk] // eslint-disable-line react-hooks/exhaustive-deps
   )
   useEffect(() => { setContentRef.current(filterNode) }, [filterNode])
 
