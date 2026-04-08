@@ -383,3 +383,35 @@ export function schedulePivotSql(routeId: string, direction: 0 | 1 | 'both', tim
     ORDER BY f.direction_id, f.trip_id, canonical_seq
   `
 }
+
+// ── Most Delayed Routes — Yesterday ───────────────────────────────────────────
+// Fixed to a single date (:yesterdayDate). Reuses startDate/endDate param names
+// so the shared terminalCte snippet works without modification.
+
+export function topDelayedYesterdaySql(groupName: string | null, timepointOnly: boolean, excludeTerminals = false) {
+  const groupJoin = groupName
+    ? `INNER JOIN gold_route_groups g ON f.route_id = g.route_id AND g.group_name = '${groupName.replace(/'/g, "''")}'`
+    : ''
+  const tc = terminalCte(excludeTerminals)
+  return `
+    ${tc ? `WITH${tc}` : ''}
+    SELECT
+      f.route_id,
+      r.route_short_name,
+      r.route_long_name,
+      COUNT(*)                                                                   AS total_stops,
+      ROUND(AVG(CASE WHEN ${ON_TIME} THEN 1.0 ELSE 0.0 END) * 100, 1)          AS on_time_pct,
+      ROUND(AVG(f.arrival_delay_seconds) / 60.0, 1)                             AS avg_delay_min
+    FROM gold_stop_dwell_fact f
+    JOIN silver_dim_route r ON f.route_id = r.route_id
+    ${groupJoin}
+    ${terminalJoin('f', excludeTerminals)}
+    WHERE f.service_date = :startDate
+      AND f.actual_arrival_ts IS NOT NULL
+    ${timepointWhere(timepointOnly, 'f')}
+    ${terminalWhere('f', excludeTerminals)}
+    GROUP BY f.route_id, r.route_short_name, r.route_long_name
+    ORDER BY avg_delay_min DESC
+    LIMIT 8
+  `
+}
