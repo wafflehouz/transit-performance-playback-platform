@@ -265,7 +265,7 @@ export default function OtpPageClient() {
         safe(fetchJson(routesTableSql(f.groupName, f.direction, tp, excTerminals), params)),
         safe(fetchJson(topDelayedYesterdaySql(grpName, tp, excTerminals), { startDate: yd, endDate: yd })),
         safe(fetchJson(missedTripsSummarySql(grpName), { serviceDate: yd })),
-        safe(fetchJson(missedTripsListSql(grpName), { serviceDate: yd })),
+        f.mode === 'all' ? safe(fetchJson(missedTripsListSql(null), { serviceDate: yd })) : Promise.resolve([]),
       ])
       setSummaryData(summary[0] ?? null)
       setTrendData(trend)
@@ -567,8 +567,8 @@ function SummaryTab({
         </div>
       </div>
 
-      {/* Missed / Partial Trips — Yesterday */}
-      {(mode === 'all' || mode === 'group') && missedList.length > 0 && (
+      {/* Missed / Partial Trips — Yesterday (all-routes view only) */}
+      {mode === 'all' && missedList.length > 0 && (
         <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Missed &amp; Partial Trips — Yesterday</h3>
