@@ -174,6 +174,32 @@ observed_counts = (
 
 # COMMAND ----------
 
+# MAGIC %md ## Step 3b — VP activity check
+# MAGIC
+# MAGIC TripUpdates can contain predictions for trips that never physically ran
+# MAGIC (uniform delay propagation with no vehicle on the road). These appear as
+# MAGIC "observed" in gold_stop_dwell_fact but have zero Vehicle Position pings.
+# MAGIC
+# MAGIC We cross-reference silver_fact_vehicle_positions: any trip with TripUpdate
+# MAGIC observations but no VP pings is downgraded to "missed" in Step 4.
+# MAGIC This aligns with Swiftly's behavior of requiring actual VP confirmation.
+
+# COMMAND ----------
+
+trips_with_vp = (
+    spark.table(SILVER_FACT_VEHICLE_POSITIONS)
+    .filter(F.col("service_date") == F.lit(target_date).cast("date"))
+    .filter(F.col("trip_id").isNotNull())
+    .select("trip_id")
+    .distinct()
+    .withColumn("has_vp", F.lit(True))
+)
+
+vp_count = trips_with_vp.count()
+print(f"Trips with VP activity on {target_date}: {vp_count:,}")
+
+# COMMAND ----------
+
 # MAGIC %md ## Step 4 — Join and classify
 
 # COMMAND ----------
@@ -181,6 +207,7 @@ observed_counts = (
 classified = (
     scheduled_with_times
     .join(observed_counts, on="trip_id", how="left")
+    .join(trips_with_vp, on="trip_id", how="left")
     .withColumn(
         "observed_stop_count",
         F.coalesce(F.col("observed_stop_count"), F.lit(0))
@@ -202,8 +229,11 @@ classified = (
     )
     .withColumn(
         "observation_status",
-        F.when(F.col("observed_stop_count") == 0, F.lit("missed"))
-         .when(F.col("completion_pct") >= 80.0,   F.lit("complete"))
+        # Trips with TripUpdate data but zero VP pings are phantom predictions —
+        # treat as missed regardless of how many stop rows were recorded.
+        F.when(F.col("observed_stop_count") == 0,                                F.lit("missed"))
+         .when(F.col("has_vp").isNull(),                                          F.lit("missed"))
+         .when(F.col("completion_pct") >= 80.0,                                  F.lit("complete"))
          .otherwise(F.lit("partial"))
     )
     .withColumn("service_date", F.lit(target_date).cast("date"))
