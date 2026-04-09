@@ -176,38 +176,54 @@ observed_counts = (
 
 # MAGIC %md ## Step 3b — VP activity check
 # MAGIC
-# MAGIC TripUpdates can contain predictions for trips that never physically ran
-# MAGIC (uniform delay propagation with no vehicle on the road). These appear as
-# MAGIC "observed" in gold_stop_dwell_fact but may have very few Vehicle Position pings.
+# MAGIC Two-path confirmation — rail and bus behave differently:
 # MAGIC
-# MAGIC We cross-reference silver_fact_vehicle_positions using a minimum ping threshold:
-# MAGIC - 0 pings          → no vehicle, definitively missed
-# MAGIC - pings, all speed ≈ 0 → vehicle parked at terminal still broadcasting trip_id;
-# MAGIC                          TripUpdate delay propagated uniformly, trip never ran
-# MAGIC - 3+ moving pings  → vehicle physically departed and ran the trip
+# MAGIC BUS routes (non-RAIL_ROUTE_IDS):
+# MAGIC   Requires MIN_VP_MOVING_PINGS pings with speed_mps > VP_STATIONARY_THRESHOLD_MPS.
+# MAGIC   Filters out stationary terminal vehicles that broadcast a trip_id without
+# MAGIC   departing (produces uniform TripUpdate delay propagation, 0 moving pings).
 # MAGIC
-# MAGIC We require MIN_VP_MOVING_PINGS pings with speed_mps > VP_STATIONARY_THRESHOLD_MPS
-# MAGIC (1.0 m/s). With 30s downsampling a vehicle moving at walking pace for 2 min
-# MAGIC produces ~4 moving pings. Stationary terminal vehicles produce 0.
+# MAGIC RAIL routes (RAIL_ROUTE_IDS = A, B):
+# MAGIC   SCADA-based positioning; speed_mps is often 0 or null even when the train
+# MAGIC   is moving. Use gold_rail_stop_actuals as the confirmation signal instead —
+# MAGIC   Gold 48 only writes rows for trips where VP stop-sequence transitions were
+# MAGIC   detected, so presence in that table confirms the trip physically ran.
 
 # COMMAND ----------
 
 MIN_VP_MOVING_PINGS = 3
 
-trips_with_vp = (
+# Bus: moving VP pings
+bus_trips_confirmed = (
     spark.table(SILVER_FACT_VEHICLE_POSITIONS)
     .filter(F.col("service_date") == F.lit(target_date).cast("date"))
     .filter(F.col("trip_id").isNotNull())
+    .filter(~F.col("route_id").isin(RAIL_ROUTE_IDS))
     .filter(F.col("speed_mps") > VP_STATIONARY_THRESHOLD_MPS)
     .groupBy("trip_id")
     .agg(F.count("*").alias("vp_moving_ping_count"))
     .filter(F.col("vp_moving_ping_count") >= MIN_VP_MOVING_PINGS)
     .select("trip_id")
+)
+
+# Rail: presence in gold_rail_stop_actuals (Gold 48 VP stop-sequence transitions)
+rail_trips_confirmed = (
+    spark.table(GOLD_RAIL_STOP_ACTUALS)
+    .filter(F.col("service_date") == F.lit(target_date).cast("date"))
+    .select("trip_id")
+    .distinct()
+)
+
+trips_with_vp = (
+    bus_trips_confirmed.union(rail_trips_confirmed)
+    .distinct()
     .withColumn("has_vp", F.lit(True))
 )
 
-vp_count = trips_with_vp.count()
-print(f"Trips with VP moving activity (>= {MIN_VP_MOVING_PINGS} pings, speed > {VP_STATIONARY_THRESHOLD_MPS} m/s) on {target_date}: {vp_count:,}")
+bus_confirmed_count  = bus_trips_confirmed.count()
+rail_confirmed_count = rail_trips_confirmed.count()
+print(f"Bus trips confirmed (moving VP >= {MIN_VP_MOVING_PINGS} pings): {bus_confirmed_count:,}")
+print(f"Rail trips confirmed (gold_rail_stop_actuals):                   {rail_confirmed_count:,}")
 
 # COMMAND ----------
 
