@@ -366,19 +366,15 @@ export function schedulePivotSql(routeId: string, direction: 0 | 1 | 'both', tim
       f.direction_id,
       f.trip_id,
       f.stop_id,
-      COALESCE(s.stop_name, f.stop_id)                          AS stop_name,
-      COALESCE(cs.seq, f.stop_sequence)                         AS canonical_seq,
+      COALESCE(s.stop_name, f.stop_id)  AS stop_name,
+      COALESCE(cs.seq, f.stop_sequence) AS canonical_seq,
       f.scheduled_arrival_ts,
-      COALESCE(r.actual_arrival_ts,     f.actual_arrival_ts)    AS actual_arrival_ts,
-      COALESCE(r.arrival_delay_seconds, f.arrival_delay_seconds) AS arrival_delay_seconds
+      f.actual_arrival_ts,
+      f.arrival_delay_seconds
     FROM gold_stop_dwell_fact f
     LEFT JOIN silver_dim_stop s ON f.stop_id = s.stop_id
     LEFT JOIN canonical_seq cs
       ON f.stop_id = cs.stop_id AND f.direction_id = cs.direction_id
-    LEFT JOIN gold_rail_stop_actuals r
-      ON r.service_date = f.service_date
-     AND r.trip_id      = f.trip_id
-     AND r.stop_sequence = f.stop_sequence
     WHERE f.service_date = :serviceDate
       AND f.route_id = '${id}'
       AND f.actual_arrival_ts IS NOT NULL

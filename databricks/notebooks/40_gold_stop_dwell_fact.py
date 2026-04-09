@@ -97,63 +97,18 @@ if row_count == 0:
 
 # COMMAND ----------
 
-# MAGIC %md ## Step 1b — Override Rail Arrivals from Gold 48
+# MAGIC %md ## Step 1b — Rail Note
 # MAGIC
-# MAGIC For routes in `RAIL_ROUTE_IDS` (A, B), replace the TripUpdates-based
-# MAGIC `actual_arrival_ts` and `arrival_delay_seconds` with VP stop-sequence
-# MAGIC transition actuals from `gold_rail_stop_actuals` (notebook 48).
-# MAGIC
-# MAGIC **Why:** Valley Metro Rail's SCADA system reports a single trip-level delay
-# MAGIC offset applied uniformly to all stops. Even with `is_first_past`, Gold 40
-# MAGIC captures the SCADA offset — every stop in a rail trip gets the same delay.
-# MAGIC Gold 48 uses the first VP ping per `(trip_id, current_stop_sequence)` to
-# MAGIC derive true per-stop arrival times with second-level precision.
-# MAGIC
-# MAGIC **Fallback:** Where Gold 48 has no coverage (VP downsampling gaps, missed
-# MAGIC stops), `actual_arrival_ts` stays as the TripUpdates value — better than NULL.
-# MAGIC Departure times remain TripUpdates-based (no VP departure signal available).
-# MAGIC
-# MAGIC **Guard:** If Gold 48 table doesn't exist yet (first pipeline run before 48
-# MAGIC has written), skip silently — TripUpdates used for all routes.
+# MAGIC Gold 48 (VP stop-sequence transitions) was trialled as an arrival override for
+# MAGIC rail routes A/B but produced ~30% early readings across all stops due to
+# MAGIC SCADA-based GPS inaccuracy (±200-300 m) preventing the proximity filter from
+# MAGIC activating. TripUpdates `is_first_past` is the best available signal for rail
+# MAGIC until Valley Metro provides a direct SCADA GTFS-RT feed.
+# MAGIC Gold 48 remains active for trip-existence confirmation in Gold 49 only.
 
 # COMMAND ----------
 
-if spark.catalog.tableExists(GOLD_RAIL_STOP_ACTUALS):
-    _rail48 = (
-        spark.table(GOLD_RAIL_STOP_ACTUALS)
-        .filter(F.col("service_date") == F.lit(target_date).cast("date"))
-        .select(
-            "trip_id",
-            "stop_sequence",
-            F.col("actual_arrival_ts").alias("_rail_actual_ts"),
-            F.col("arrival_delay_seconds").alias("_rail_delay_s"),
-        )
-    )
-
-    final_tu = (
-        final_tu
-        .join(_rail48, on=["trip_id", "stop_sequence"], how="left")
-        .withColumn(
-            "actual_arrival_ts",
-            F.when(
-                F.col("route_id").isin(RAIL_ROUTE_IDS) & F.col("_rail_actual_ts").isNotNull(),
-                F.col("_rail_actual_ts")
-            ).otherwise(F.col("actual_arrival_ts"))
-        )
-        .withColumn(
-            "arrival_delay_seconds",
-            F.when(
-                F.col("route_id").isin(RAIL_ROUTE_IDS) & F.col("_rail_delay_s").isNotNull(),
-                F.col("_rail_delay_s")
-            ).otherwise(F.col("arrival_delay_seconds"))
-        )
-        .drop("_rail_actual_ts", "_rail_delay_s")
-    )
-
-    _rail_count = final_tu.filter(F.col("route_id").isin(RAIL_ROUTE_IDS)).count()
-    print(f"Rail arrival override active — {_rail_count:,} rail stops in final_tu (routes {RAIL_ROUTE_IDS})")
-else:
-    print(f"⚠ {GOLD_RAIL_STOP_ACTUALS} not found — using TripUpdates for all routes")
+print("Rail actuals: using TripUpdates is_first_past for all routes (Gold 48 override removed — see Step 1b note)")
 
 # COMMAND ----------
 

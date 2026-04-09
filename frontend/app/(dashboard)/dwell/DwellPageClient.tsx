@@ -110,6 +110,7 @@ export default function DwellPageClient() {
   const [activeTab, setActiveTab] = useState<TabId>('summary')
 
   const [routes, setRoutes] = useState<DimRoute[]>([])
+  const [routesLoading, setRoutesLoading] = useState(true)
   const [groups, setGroups] = useState<string[]>([])
   const [summaryData, setSummaryData] = useState<Record<string, any> | null>(null)
   const [bucketData, setBucketData] = useState<any[]>([])
@@ -129,7 +130,7 @@ export default function DwellPageClient() {
 
   // Static data once
   useEffect(() => {
-    fetchJson(DWELL_ROUTES_SQL).then(setRoutes).catch(() => {})
+    fetchJson(DWELL_ROUTES_SQL).then(setRoutes).catch(() => {}).finally(() => setRoutesLoading(false))
     fetchJson(DWELL_GROUPS_SQL)
       .then((rows: any[]) => setGroups(rows.map((r) => r.group_name)))
       .catch(() => {})
@@ -227,6 +228,7 @@ export default function DwellPageClient() {
         filters={filters}
         onChange={(f) => setFilters((prev) => ({ ...prev, ...f }))}
         routes={routes}
+        routesLoading={routesLoading}
         groups={groups}
         activePreset={preset}
         onPresetChange={handlePresetChange}

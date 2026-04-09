@@ -111,6 +111,7 @@ export default function OtpPageClient() {
   const [savedOk, setSavedOk] = useState(false)
 
   const [routes, setRoutes] = useState<DimRoute[]>([])
+  const [routesLoading, setRoutesLoading] = useState(true)
   const [groups, setGroups] = useState<string[]>([])
   const [summaryData, setSummaryData] = useState<Record<string, any> | null>(null)
   const [trendData, setTrendData] = useState<any[]>([])
@@ -140,7 +141,7 @@ export default function OtpPageClient() {
 
   // Load static data once
   useEffect(() => {
-    fetchJson(ROUTES_WITH_DATA_SQL).then(setRoutes).catch(() => {})
+    fetchJson(ROUTES_WITH_DATA_SQL).then(setRoutes).catch(() => {}).finally(() => setRoutesLoading(false))
     fetchJson(ROUTE_GROUPS_SQL)
       .then((rows: any[]) => setGroups(rows.map((r) => r.group_name)))
       .catch(() => {})
@@ -293,6 +294,7 @@ export default function OtpPageClient() {
           filters={filters}
           onChange={setFilters}
           routes={routes}
+          routesLoading={routesLoading}
           groups={groups}
           activePreset={preset}
           onPresetChange={handlePresetChange}
