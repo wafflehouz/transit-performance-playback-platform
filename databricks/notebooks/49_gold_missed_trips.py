@@ -178,25 +178,35 @@ observed_counts = (
 # MAGIC
 # MAGIC TripUpdates can contain predictions for trips that never physically ran
 # MAGIC (uniform delay propagation with no vehicle on the road). These appear as
-# MAGIC "observed" in gold_stop_dwell_fact but have zero Vehicle Position pings.
+# MAGIC "observed" in gold_stop_dwell_fact but may have very few Vehicle Position pings.
 # MAGIC
-# MAGIC We cross-reference silver_fact_vehicle_positions: any trip with TripUpdate
-# MAGIC observations but no VP pings is downgraded to "missed" in Step 4.
-# MAGIC This aligns with Swiftly's behavior of requiring actual VP confirmation.
+# MAGIC We cross-reference silver_fact_vehicle_positions using a minimum ping threshold:
+# MAGIC - 0 pings  → no vehicle, definitively missed
+# MAGIC - 1–2 pings → brief terminal association (vehicle logged to trip_id before
+# MAGIC               being reassigned); uniform delay propagation still present
+# MAGIC - 3+ pings → sustained tracking; trip physically ran
+# MAGIC
+# MAGIC MIN_VP_PINGS = 3 is intentionally conservative. With 30s downsampling, a trip
+# MAGIC that ran for even 2 minutes produces ~4 pings. Raising this if false negatives
+# MAGIC appear is safe; lowering it risks re-admitting phantom trips.
 
 # COMMAND ----------
+
+MIN_VP_PINGS = 3
 
 trips_with_vp = (
     spark.table(SILVER_FACT_VEHICLE_POSITIONS)
     .filter(F.col("service_date") == F.lit(target_date).cast("date"))
     .filter(F.col("trip_id").isNotNull())
+    .groupBy("trip_id")
+    .agg(F.count("*").alias("vp_ping_count"))
+    .filter(F.col("vp_ping_count") >= MIN_VP_PINGS)
     .select("trip_id")
-    .distinct()
     .withColumn("has_vp", F.lit(True))
 )
 
 vp_count = trips_with_vp.count()
-print(f"Trips with VP activity on {target_date}: {vp_count:,}")
+print(f"Trips with VP activity (>= {MIN_VP_PINGS} pings) on {target_date}: {vp_count:,}")
 
 # COMMAND ----------
 
