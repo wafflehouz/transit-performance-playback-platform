@@ -415,3 +415,53 @@ export function topDelayedYesterdaySql(groupName: string | null, timepointOnly: 
     LIMIT 8
   `
 }
+
+// ── Missed Trips — Yesterday ───────────────────────────────────────────────────
+// Reads gold_missed_trips for a single service_date (:serviceDate).
+// missedTripsSummarySql: fleet-level completion stats (one row).
+// missedTripsListSql: individual missed/partial trips (up to 20 rows).
+
+export function missedTripsSummarySql(groupName: string | null) {
+  const groupJoin = groupName
+    ? `INNER JOIN gold_route_groups g ON m.route_id = g.route_id AND g.group_name = '${groupName.replace(/'/g, "''")}'`
+    : ''
+  return `
+    SELECT
+      COUNT(*)                                                              AS total_scheduled,
+      SUM(CASE WHEN observation_status = 'complete' THEN 1 ELSE 0 END)    AS complete_count,
+      SUM(CASE WHEN observation_status = 'partial'  THEN 1 ELSE 0 END)    AS partial_count,
+      SUM(CASE WHEN observation_status = 'missed'   THEN 1 ELSE 0 END)    AS missed_count,
+      ROUND(
+        SUM(CASE WHEN observation_status IN ('complete','partial') THEN 1 ELSE 0 END)
+        * 100.0 / NULLIF(COUNT(*), 0), 1
+      )                                                                     AS fleet_completion_pct
+    FROM gold_missed_trips m
+    ${groupJoin}
+    WHERE m.service_date = :serviceDate
+  `
+}
+
+export function missedTripsListSql(groupName: string | null) {
+  const groupJoin = groupName
+    ? `INNER JOIN gold_route_groups g ON m.route_id = g.route_id AND g.group_name = '${groupName.replace(/'/g, "''")}'`
+    : ''
+  return `
+    SELECT
+      m.route_id,
+      COALESCE(r.route_short_name, m.route_id)  AS route_short_name,
+      m.direction_id,
+      m.trip_headsign,
+      m.observation_status,
+      m.completion_pct,
+      m.scheduled_stop_count,
+      m.observed_stop_count,
+      UNIX_TIMESTAMP(m.planned_start_ts) * 1000  AS planned_start_ms
+    FROM gold_missed_trips m
+    LEFT JOIN silver_dim_route r ON m.route_id = r.route_id
+    ${groupJoin}
+    WHERE m.service_date = :serviceDate
+      AND m.observation_status IN ('missed', 'partial')
+    ORDER BY m.observation_status DESC, m.route_id, m.planned_start_ts
+    LIMIT 20
+  `
+}

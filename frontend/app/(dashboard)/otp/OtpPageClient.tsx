@@ -21,6 +21,7 @@ import {
   singleRouteSummarySql, timeOfDaySql, stopOtpSql,
   delayHistogramSql, singleRouteTrendSql, routeHeadsignSql,
   schedulePivotSql, topDelayedYesterdaySql,
+  missedTripsSummarySql, missedTripsListSql,
 } from '@/lib/queries/otp'
 import { cn } from '@/lib/utils'
 
@@ -115,6 +116,8 @@ export default function OtpPageClient() {
   const [trendData, setTrendData] = useState<any[]>([])
   const [routesData, setRoutesData] = useState<any[]>([])
   const [topDelayedData, setTopDelayedData] = useState<any[]>([])
+  const [missedSummary, setMissedSummary] = useState<Record<string, any> | null>(null)
+  const [missedList, setMissedList] = useState<any[]>([])
   const [todData, setTodData] = useState<any[]>([])
   const [stopsData, setStopsData] = useState<any[]>([])
   const [histData, setHistData] = useState<any[]>([])
@@ -217,6 +220,8 @@ export default function OtpPageClient() {
     setHistData([])
     setStopsData([])
     setHeadsigns({})
+    setMissedSummary(null)
+    setMissedList([])
 
     const params = { startDate: f.startDate, endDate: f.endDate }
     const errors: string[] = []
@@ -253,18 +258,21 @@ export default function OtpPageClient() {
       yesterday.setDate(yesterday.getDate() - 1)
       const yd = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`
 
-      const [summary, trend, routeRows, topDelayed] = await Promise.all([
+      const grpName = f.mode === 'group' ? f.groupName : null
+      const [summary, trend, routeRows, topDelayed, missedSum, missedRows] = await Promise.all([
         safe(fetchJson(summaryAllSql(f.groupName, tp, excTerminals), params)),
         safe(fetchJson(otpTrendSql(f.groupName, tp, excTerminals), params)),
         safe(fetchJson(routesTableSql(f.groupName, f.direction, tp, excTerminals), params)),
-        (f.mode === 'all' || f.mode === 'group')
-          ? safe(fetchJson(topDelayedYesterdaySql(f.mode === 'group' ? f.groupName : null, tp, excTerminals), { startDate: yd, endDate: yd }))
-          : Promise.resolve([]),
+        safe(fetchJson(topDelayedYesterdaySql(grpName, tp, excTerminals), { startDate: yd, endDate: yd })),
+        safe(fetchJson(missedTripsSummarySql(grpName), { serviceDate: yd })),
+        safe(fetchJson(missedTripsListSql(grpName), { serviceDate: yd })),
       ])
       setSummaryData(summary[0] ?? null)
       setTrendData(trend)
       setRoutesData(routeRows)
       setTopDelayedData(topDelayed)
+      setMissedSummary(missedSum[0] ?? null)
+      setMissedList(missedRows)
     }
 
     if (errors.length > 0) setError(errors[0])
@@ -397,7 +405,14 @@ export default function OtpPageClient() {
         ) : (
           <>
             {activeTab === 'summary' && (
-              <SummaryTab summary={summaryData} trend={trendData} mode={filters.mode} topDelayed={topDelayedData} />
+              <SummaryTab
+                summary={summaryData}
+                trend={trendData}
+                mode={filters.mode}
+                topDelayed={topDelayedData}
+                missedSummary={missedSummary}
+                missedList={missedList}
+              />
             )}
             {activeTab === 'routes' && (
               <RoutesTab rows={routesData} routes={routes} />
@@ -430,16 +445,26 @@ export default function OtpPageClient() {
 
 // ── Summary tab ────────────────────────────────────────────────────────────────
 
+function fmtPhoenixHHMM(ms: number): string {
+  // UTC ms → Phoenix local (UTC-7) HH:MM
+  const adjusted = new Date(ms - 7 * 3600 * 1000)
+  return adjusted.toISOString().slice(11, 16)
+}
+
 function SummaryTab({
   summary,
   trend,
   mode,
   topDelayed = [],
+  missedSummary = null,
+  missedList = [],
 }: {
   summary: Record<string, any> | null
   trend: any[]
   mode: OtpFilterState['mode']
   topDelayed?: any[]
+  missedSummary?: Record<string, any> | null
+  missedList?: any[]
 }) {
   if (!summary) return <EmptyState />
 
@@ -464,7 +489,7 @@ function SummaryTab({
   return (
     <div className="p-6 space-y-6">
       {/* KPI row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className={`grid gap-4 ${(mode === 'all' || mode === 'group') ? 'grid-cols-2 sm:grid-cols-5' : 'grid-cols-2 sm:grid-cols-4'}`}>
         <KpiCard label="On-Time"    value={`${onTime.toFixed(1)}%`} color={OTP_COLORS.onTime} />
         <KpiCard label="Early"      value={`${early.toFixed(1)}%`}  color={OTP_COLORS.early} />
         <KpiCard label="Late"       value={`${late.toFixed(1)}%`}   color={OTP_COLORS.late} />
@@ -475,6 +500,16 @@ function SummaryTab({
             : String(toNum(summary.route_count))}
           sub={mode === 'single' ? 'observations' : 'active'}
         />
+        {(mode === 'all' || mode === 'group') && (
+          <KpiCard
+            label="Fleet Complete"
+            value={missedSummary ? `${toNum(missedSummary.fleet_completion_pct).toFixed(1)}%` : '—'}
+            color={missedSummary && toNum(missedSummary.fleet_completion_pct) >= 95 ? OTP_COLORS.onTime : OTP_COLORS.late}
+            sub={missedSummary
+              ? `${toNum(missedSummary.missed_count)} missed · ${toNum(missedSummary.partial_count)} partial`
+              : 'yesterday'}
+          />
+        )}
       </div>
 
       {/* Charts row */}
@@ -531,6 +566,63 @@ function SummaryTab({
           )}
         </div>
       </div>
+
+      {/* Missed / Partial Trips — Yesterday */}
+      {(mode === 'all' || mode === 'group') && missedList.length > 0 && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Missed &amp; Partial Trips — Yesterday</h3>
+            {missedSummary && (
+              <div className="flex items-center gap-3 text-xs text-gray-500">
+                <span className="text-red-400 font-semibold">{toNum(missedSummary.missed_count)} missed</span>
+                <span className="text-orange-400 font-semibold">{toNum(missedSummary.partial_count)} partial</span>
+                <span className="text-gray-600">of {toNum(missedSummary.total_scheduled).toLocaleString()} scheduled</span>
+              </div>
+            )}
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-800">
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Route</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Headsign</th>
+                <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Planned Start</th>
+                <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Completion</th>
+                <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {missedList.map((row, i) => {
+                const isMissed = row.observation_status === 'missed'
+                const statusColor = isMissed ? '#ef4444' : '#f97316'
+                const pct = isMissed ? 0 : toNum(row.completion_pct)
+                const startMs = toNum(row.planned_start_ms)
+                return (
+                  <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
+                    <td className="px-4 py-2.5">
+                      <span className="text-white font-medium">{row.route_short_name}</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-gray-400 text-xs max-w-[180px] truncate">{row.trip_headsign ?? '—'}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-gray-300 text-xs">
+                      {startMs ? fmtPhoenixHHMM(startMs) : '—'}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-xs" style={{ color: statusColor }}>
+                      {isMissed ? '0%' : `${pct.toFixed(0)}%`}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <span
+                        className="inline-block px-2 py-0.5 rounded text-xs font-semibold"
+                        style={{ background: `${statusColor}22`, color: statusColor }}
+                      >
+                        {row.observation_status}
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Most Delayed Yesterday — below charts */}
       {(mode === 'all' || mode === 'group') && topDelayed.length > 0 && (
