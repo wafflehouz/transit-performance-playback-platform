@@ -9,7 +9,10 @@
 //   silver_dim_stop          — stop_name, lat, lon
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Trips that have path data for a given route + service date
+// Trips that have path data for a given route + service date.
+// first_timepoint_scheduled_ts = scheduled time at the first GTFS timepoint (timepoint=1),
+// matching the first column of the printed timetable. Falls back to first_stop_scheduled_ts
+// (min scheduled time across all observed stops) when no timepoint data exists.
 export function playbackTripListSql(routeId: string) {
   const id = routeId.replace(/'/g, "''")
   return `
@@ -17,17 +20,20 @@ export function playbackTripListSql(routeId: string) {
       p.trip_id,
       t.direction_id,
       t.trip_headsign,
-      MIN(p.point_ts)           AS first_ts,
-      MAX(p.point_ts)           AS last_ts,
-      COUNT(*)                  AS point_count,
-      MIN(f.scheduled_arrival_ts) AS first_stop_scheduled_ts
+      MIN(p.point_ts)                                                         AS first_ts,
+      MAX(p.point_ts)                                                         AS last_ts,
+      COUNT(*)                                                                AS point_count,
+      MIN(f.scheduled_arrival_ts)                                             AS first_stop_scheduled_ts,
+      MIN(CASE WHEN ss.timepoint = 1 THEN f.scheduled_arrival_ts END)        AS first_timepoint_scheduled_ts
     FROM gold_trip_path_fact p
     INNER JOIN silver_dim_trip t ON p.trip_id = t.trip_id AND t.route_id = '${id}'
     LEFT JOIN gold_stop_dwell_fact f
       ON f.trip_id = p.trip_id AND f.service_date = p.service_date
+    LEFT JOIN silver_fact_stop_schedule ss
+      ON ss.trip_id = f.trip_id AND ss.stop_sequence = f.stop_sequence
     WHERE p.service_date = :serviceDate
     GROUP BY p.trip_id, t.direction_id, t.trip_headsign
-    ORDER BY first_stop_scheduled_ts, first_ts
+    ORDER BY COALESCE(first_timepoint_scheduled_ts, first_stop_scheduled_ts), first_ts
   `
 }
 
