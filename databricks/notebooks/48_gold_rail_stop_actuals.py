@@ -135,7 +135,7 @@ if rail_count == 0:
 
 # COMMAND ----------
 
-RAIL_ARRIVAL_RADIUS_M = 300.0
+RAIL_ARRIVAL_RADIUS_M = 150.0
 _EARTH_R = 6371000.0
 
 stop_locs = (
@@ -182,7 +182,7 @@ vp_with_dist = (
 
 # Priority:
 # 1 — near stop AND in arrival window (best: physically arrived, timely)
-# 2 — in arrival window only (timely but not yet within 300m — use as fallback)
+# 2 — in arrival window only (timely but not yet within 150m — use as fallback)
 # 3 — everything else (last resort: prevents gaps but may be stale)
 w_arrival = Window.partitionBy("trip_id", "stop_sequence").orderBy(
     F.when(F.col("_near_stop") & F.col("_in_window"), F.lit(1))
@@ -199,8 +199,84 @@ first_ping = (
     .withColumnRenamed("vehicle_ts", "actual_arrival_ts")
 )
 
+# COMMAND ----------
+
+# MAGIC %md ## Step 2b — Origin terminal anti-layover clamp
+# MAGIC
+# MAGIC For the first stop of each trip (min stop_sequence), the train sits at the
+# MAGIC terminal during layover with current_stop_sequence already set to the first
+# MAGIC sequence. Those pre-departure VP pings pass the proximity filter and register
+# MAGIC as early arrivals, penalizing on-time departures.
+# MAGIC
+# MAGIC Fix: identify the minimum stop_sequence per trip and clamp its actual_arrival_ts
+# MAGIC to no earlier than scheduled_arrival_ts - ORIGIN_CLAMP_SECONDS. This allows
+# MAGIC legitimate early departures (1–2 min) while blocking layover-period readings.
+# MAGIC The scheduled time comes from silver_fact_stop_schedule via the join in Step 3;
+# MAGIC here we apply it via a self-join on the same schedule table.
+
+# COMMAND ----------
+
+ORIGIN_CLAMP_SECONDS = 180  # 3 minutes — allows real early departures, blocks layover
+
+# Identify minimum stop_sequence per trip
+_w_trip = Window.partitionBy("trip_id")
+first_ping = first_ping.withColumn(
+    "_min_seq", F.min("stop_sequence").over(_w_trip)
+)
+
+# Load scheduled times for the origin stop clamp
+_sched_origin = (
+    spark.table(SILVER_FACT_STOP_SCHEDULE)
+    .select("trip_id", "stop_sequence", "scheduled_arrival_secs")
+)
+
+# Join to get scheduled_arrival_secs for origin stop only (used for clamping)
+first_ping = (
+    first_ping
+    .join(
+        _sched_origin.withColumnRenamed("scheduled_arrival_secs", "_origin_sched_secs"),
+        on=["trip_id", "stop_sequence"],
+        how="left",
+    )
+)
+
+# Phoenix midnight anchor (same logic as Step 4)
+_anchor_clamp = F.when(
+    F.col("_origin_sched_secs") > 86400,
+    F.date_sub(F.col("service_date"), 1)
+).otherwise(F.col("service_date"))
+
+_phoenix_midnight_clamp = F.unix_timestamp(
+    F.to_utc_timestamp(
+        F.to_timestamp(_anchor_clamp.cast("string"), "yyyy-MM-dd"),
+        "America/Phoenix"
+    )
+)
+
+# For the origin stop only: clamp actual_arrival_ts to >= scheduled - ORIGIN_CLAMP_SECONDS
+first_ping = (
+    first_ping
+    .withColumn(
+        "actual_arrival_ts",
+        F.when(
+            (F.col("stop_sequence") == F.col("_min_seq"))
+            & F.col("_origin_sched_secs").isNotNull(),
+            F.greatest(
+                F.col("actual_arrival_ts"),
+                F.to_timestamp(
+                    _phoenix_midnight_clamp
+                    + F.col("_origin_sched_secs")
+                    - F.lit(ORIGIN_CLAMP_SECONDS)
+                )
+            )
+        ).otherwise(F.col("actual_arrival_ts"))
+    )
+    .drop("_min_seq", "_origin_sched_secs")
+)
+
 stop_count = first_ping.count()
 print(f"Distinct (trip, stop_sequence) arrivals detected: {stop_count:,}")
+print(f"Origin terminal clamp applied: <= {ORIGIN_CLAMP_SECONDS}s early allowed at first stop")
 
 # COMMAND ----------
 
