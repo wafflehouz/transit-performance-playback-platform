@@ -421,6 +421,25 @@ export function topDelayedYesterdaySql(groupName: string | null, timepointOnly: 
 // missedTripsSummarySql: fleet-level completion stats (one row).
 // missedTripsListSql: individual missed/partial trips (up to 20 rows).
 
+// Missed trips for the Schedule tab — fetches only observation_status='missed'
+// trips for the route so they can be injected into the pivot as empty rows.
+// Partial trips already appear in gold_stop_dwell_fact (≥1 observed stop).
+export function scheduleMissedSql(routeId: string) {
+  const id = routeId.replace(/'/g, "''")
+  return `
+    SELECT
+      trip_id,
+      direction_id,
+      trip_headsign,
+      UNIX_TIMESTAMP(planned_start_ts) * 1000  AS planned_start_ms
+    FROM gold_missed_trips
+    WHERE service_date = :serviceDate
+      AND route_id = '${id}'
+      AND observation_status = 'missed'
+    ORDER BY planned_start_ts
+  `
+}
+
 export function missedTripsSummarySql(groupName: string | null) {
   const groupJoin = groupName
     ? `INNER JOIN gold_route_groups g ON m.route_id = g.route_id AND g.group_name = '${groupName.replace(/'/g, "''")}'`

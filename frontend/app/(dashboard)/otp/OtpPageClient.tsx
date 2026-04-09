@@ -21,7 +21,7 @@ import {
   singleRouteSummarySql, timeOfDaySql, stopOtpSql,
   delayHistogramSql, singleRouteTrendSql, routeHeadsignSql,
   schedulePivotSql, topDelayedYesterdaySql,
-  missedTripsSummarySql, missedTripsListSql,
+  missedTripsSummarySql, missedTripsListSql, scheduleMissedSql,
 } from '@/lib/queries/otp'
 import { cn } from '@/lib/utils'
 
@@ -975,6 +975,7 @@ function ScheduleTab({
   headsigns: Record<number, string>
 }) {
   const [rows, setRows] = useState<any[]>([])
+  const [missedTrips, setMissedTrips] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -982,8 +983,11 @@ function ScheduleTab({
     if (!routeId) return
     setLoading(true)
     setError(null)
-    fetchJson(schedulePivotSql(routeId, direction, timepointOnly), { serviceDate })
-      .then(setRows)
+    Promise.all([
+      fetchJson(schedulePivotSql(routeId, direction, timepointOnly), { serviceDate }),
+      fetchJson(scheduleMissedSql(routeId), { serviceDate }).catch(() => []),
+    ])
+      .then(([pivotRows, missed]) => { setRows(pivotRows); setMissedTrips(missed) })
       .catch((e: any) => setError(e.message))
       .finally(() => setLoading(false))
   }, [routeId, direction, timepointOnly, serviceDate])
@@ -1017,6 +1021,7 @@ function ScheduleTab({
             { label: 'On-time', bg: '#1f2937', border: true },
             { label: '6–10 min late', bg: '#d97706' },
             { label: '10+ min late', bg: '#dc2626' },
+            { label: 'Missing', bg: '#1f0a0a', border: true },
           ].map((s) => (
             <span key={s.label} className="flex items-center gap-1">
               <span
@@ -1058,6 +1063,15 @@ function ScheduleTab({
             tripFirstTs.set(r.trip_id, ts)
           }
         }
+        // Missed trips for this direction (not in pivot at all)
+        const dirMissed = missedTrips.filter((m) => toNum(m.direction_id) === dirId)
+        for (const m of dirMissed) {
+          if (!tripFirstTs.has(m.trip_id)) {
+            tripFirstTs.set(m.trip_id, new Date(toNum(m.planned_start_ms)).toISOString())
+          }
+        }
+        const missedSet = new Set(dirMissed.map((m) => m.trip_id))
+
         const trips = Array.from(tripFirstTs.entries())
           .sort((a, b) => a[1].localeCompare(b[1]))
           .map(([trip_id, firstTs]) => ({ trip_id, firstTs }))
@@ -1081,7 +1095,10 @@ function ScheduleTab({
               {dirHeading}
             </div>
             <p className="px-4 pt-2 pb-1 text-xs text-gray-600">
-              {trips.length} trips · {stops.length} stops
+              {trips.length - dirMissed.length} trips · {stops.length} stops
+              {dirMissed.length > 0 && (
+                <span className="text-red-900 ml-2">· {dirMissed.length} missing</span>
+              )}
             </p>
             <div className="overflow-x-auto">
               <div style={{ minWidth: ROW_LABEL_W + stops.length * CELL_W + 16 }}>
@@ -1119,6 +1136,7 @@ function ScheduleTab({
 
                 {/* Trip rows */}
                 {trips.map(({ trip_id, firstTs }) => {
+                  const isMissed = missedSet.has(trip_id)
                   const stopLookup = lookup.get(trip_id) ?? new Map()
                   return (
                     <div key={trip_id} style={{ display: 'flex', alignItems: 'center', height: CELL_H }}>
@@ -1130,44 +1148,65 @@ function ScheduleTab({
                           textAlign: 'right',
                           paddingRight: 8,
                           fontSize: 10,
-                          color: '#6b7280',
+                          color: isMissed ? '#ef4444' : '#6b7280',
                           fontVariantNumeric: 'tabular-nums',
                         }}
                       >
                         {formatScheduleTime(firstTs)}
                       </div>
 
-                      {/* Delay cells */}
-                      {stops.map((stop) => {
-                        const delay = stopLookup.has(stop.stop_id) ? stopLookup.get(stop.stop_id)! : null
-                        const { bg, text } = scheduleDelayColor(delay)
-                        return (
-                          <div
-                            key={stop.stop_id}
-                            style={{
-                              width: CELL_W,
-                              height: CELL_H,
-                              flexShrink: 0,
-                              background: bg,
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontSize: 9,
-                              color: text,
-                              fontVariantNumeric: 'tabular-nums',
-                              borderLeft: '1px solid #111827',
-                              borderBottom: '1px solid #111827',
-                            }}
-                            title={
-                              delay !== null
-                                ? `${stop.stop_name}: ${formatDelay(delay)}`
-                                : `${stop.stop_name}: no data`
-                            }
-                          >
-                            {delay !== null ? formatDelay(delay) : ''}
-                          </div>
-                        )
-                      })}
+                      {/* Missed trip: single stripe spanning all stop columns */}
+                      {isMissed ? (
+                        <div
+                          style={{
+                            flex: 1,
+                            height: CELL_H,
+                            background: '#1f0a0a',
+                            borderBottom: '1px solid #111827',
+                            display: 'flex',
+                            alignItems: 'center',
+                            paddingLeft: 8,
+                            fontSize: 9,
+                            color: '#7f1d1d',
+                            letterSpacing: '0.05em',
+                            fontWeight: 600,
+                          }}
+                        >
+                          missing
+                        </div>
+                      ) : (
+                        /* Delay cells */
+                        stops.map((stop) => {
+                          const delay = stopLookup.has(stop.stop_id) ? stopLookup.get(stop.stop_id)! : null
+                          const { bg, text } = scheduleDelayColor(delay)
+                          return (
+                            <div
+                              key={stop.stop_id}
+                              style={{
+                                width: CELL_W,
+                                height: CELL_H,
+                                flexShrink: 0,
+                                background: bg,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: 9,
+                                color: text,
+                                fontVariantNumeric: 'tabular-nums',
+                                borderLeft: '1px solid #111827',
+                                borderBottom: '1px solid #111827',
+                              }}
+                              title={
+                                delay !== null
+                                  ? `${stop.stop_name}: ${formatDelay(delay)}`
+                                  : `${stop.stop_name}: no data`
+                              }
+                            >
+                              {delay !== null ? formatDelay(delay) : ''}
+                            </div>
+                          )
+                        })
+                      )}
                     </div>
                   )
                 })}
