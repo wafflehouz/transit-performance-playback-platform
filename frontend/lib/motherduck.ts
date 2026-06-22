@@ -23,6 +23,9 @@ function openConnection(): Promise<DuckConn> {
     // The callback form of Database() fires only after MotherDuck's network
     // handshake succeeds. Without it, connect()/all() run before the session
     // is live and produce "Connection was never established."
+    // Vercel Lambda has no HOME directory; DuckDB needs one to store the
+    // MotherDuck extension. /tmp is the only writable path in Lambda.
+    if (!process.env.HOME) process.env.HOME = '/tmp'
     _db = new duckdb.Database(
       `md:transit?motherduck_token=${TOKEN}`,
       (err: Error | null) => {
