@@ -14,23 +14,43 @@ type DuckConn = any
 
 let _db: InstanceType<typeof duckdb.Database> | null = null
 let _conn: DuckConn = null
+// Promise that resolves when the MotherDuck async handshake completes.
+// Using a promise prevents concurrent requests from each opening a connection.
+let _ready: Promise<DuckConn> | null = null
 
-function openConnection(): DuckConn {
-  _db = new duckdb.Database(`md:transit?motherduck_token=${TOKEN}`)
-  _conn = _db.connect()
-  return _conn
+function openConnection(): Promise<DuckConn> {
+  _ready = new Promise<DuckConn>((resolve, reject) => {
+    // The callback form of Database() fires only after MotherDuck's network
+    // handshake succeeds. Without it, connect()/all() run before the session
+    // is live and produce "Connection was never established."
+    _db = new duckdb.Database(
+      `md:transit?motherduck_token=${TOKEN}`,
+      (err: Error | null) => {
+        if (err) {
+          _db = null
+          _ready = null
+          reject(err)
+          return
+        }
+        _conn = _db!.connect()
+        resolve(_conn)
+      }
+    )
+  })
+  return _ready
 }
 
-function getConnection(): DuckConn {
-  if (!_conn) openConnection()
-  return _conn
+function getConnection(): Promise<DuckConn> {
+  if (!_ready) openConnection()
+  return _ready!
 }
 
 function resetConnection() {
   try { _conn?.close?.() } catch { /* ignore */ }
-  try { _db?.close?.() }  catch { /* ignore */ }
+  try { (_db as InstanceType<typeof duckdb.Database> | null)?.close?.() } catch { /* ignore */ }
   _db = null
   _conn = null
+  _ready = null
 }
 
 function execAll(conn: DuckConn, sql: string): Promise<Record<string, unknown>[]> {
@@ -62,17 +82,18 @@ export async function queryMotherDuck<T = Record<string, unknown>>(
   const wrappedSql = `SELECT to_json(t)::VARCHAR AS _row FROM (${resolvedSql}) t`
 
   async function run(): Promise<Record<string, unknown>[]> {
-    return execAll(getConnection(), wrappedSql)
+    const conn = await getConnection()
+    return execAll(conn, wrappedSql)
   }
 
   let raw: Record<string, unknown>[]
   try {
     raw = await run()
   } catch (err) {
-    // Vercel freezes containers between requests; the DuckDB connection can
-    // become stale after thaw. Reset and retry once on connection errors.
+    // After Vercel container thaw, the established connection may go stale.
+    // Reset and retry once on any connection-related error.
     const msg = err instanceof Error ? err.message : ''
-    if (msg.includes('Connection') || msg.includes('connection')) {
+    if (msg.toLowerCase().includes('connection')) {
       resetConnection()
       raw = await run()
     } else {
