@@ -1,12 +1,18 @@
-import duckdb from 'duckdb'
 import type { QueryResult } from './databricks'
 
 const TOKEN = process.env.MOTHERDUCK_TOKEN!
 
-let _db: duckdb.Database | null = null
-let _conn: duckdb.Connection | null = null
+// Top-level import of duckdb causes Turbopack to parse duckdb's node-pre-gyp
+// package.json at build time, which crashes because duckdb omits napi_versions.
+// /* turbopack-ignore */ prevents Turbopack from following this require at all;
+// serverExternalPackages ensures webpack/Vercel still traces the native binary.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const duckdb = require(/* turbopack-ignore */ 'duckdb') as typeof import('duckdb')
 
-function getConnection(): duckdb.Connection {
+let _db: InstanceType<typeof duckdb.Database> | null = null
+let _conn: ReturnType<InstanceType<typeof duckdb.Database>['connect']> | null = null
+
+function getConnection(): ReturnType<InstanceType<typeof duckdb.Database>['connect']> {
   if (!_conn) {
     _db = new duckdb.Database(`md:transit?motherduck_token=${TOKEN}`)
     _conn = _db.connect()
@@ -14,7 +20,9 @@ function getConnection(): duckdb.Connection {
   return _conn
 }
 
-function execAll(conn: duckdb.Connection, sql: string): Promise<Record<string, unknown>[]> {
+type DuckDBConnection = ReturnType<InstanceType<typeof duckdb.Database>['connect']>
+
+function execAll(conn: DuckDBConnection, sql: string): Promise<Record<string, unknown>[]> {
   return new Promise((resolve, reject) => {
     conn.all(sql, (err: Error | null, rows: Record<string, unknown>[]) => {
       if (err) reject(err)
