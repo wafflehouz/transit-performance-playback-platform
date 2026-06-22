@@ -9,20 +9,31 @@ const TOKEN = process.env.MOTHERDUCK_TOKEN!
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const duckdb = require('duckdb') as typeof import('duckdb')
 
-let _db: InstanceType<typeof duckdb.Database> | null = null
-let _conn: ReturnType<InstanceType<typeof duckdb.Database>['connect']> | null = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DuckConn = any
 
-function getConnection(): ReturnType<InstanceType<typeof duckdb.Database>['connect']> {
-  if (!_conn) {
-    _db = new duckdb.Database(`md:transit?motherduck_token=${TOKEN}`)
-    _conn = _db.connect()
-  }
+let _db: InstanceType<typeof duckdb.Database> | null = null
+let _conn: DuckConn = null
+
+function openConnection(): DuckConn {
+  _db = new duckdb.Database(`md:transit?motherduck_token=${TOKEN}`)
+  _conn = _db.connect()
   return _conn
 }
 
-type Conn = ReturnType<InstanceType<typeof duckdb.Database>['connect']>
+function getConnection(): DuckConn {
+  if (!_conn) openConnection()
+  return _conn
+}
 
-function execAll(conn: Conn, sql: string): Promise<Record<string, unknown>[]> {
+function resetConnection() {
+  try { _conn?.close?.() } catch { /* ignore */ }
+  try { _db?.close?.() }  catch { /* ignore */ }
+  _db = null
+  _conn = null
+}
+
+function execAll(conn: DuckConn, sql: string): Promise<Record<string, unknown>[]> {
   return new Promise((resolve, reject) => {
     conn.all(sql, (err: Error | null, rows: Record<string, unknown>[]) => {
       if (err) reject(err)
@@ -46,12 +57,28 @@ export async function queryMotherDuck<T = Record<string, unknown>>(
     resolvedSql = resolvedSql.replaceAll(`:${key}`, escaped)
   }
 
-  const conn = getConnection()
-
   // Wrap in to_json() so DuckDB serializes BigInt columns (COUNT, SUM) to
   // JSON strings in C++ before they hit the Node.js NAPI layer.
   const wrappedSql = `SELECT to_json(t)::VARCHAR AS _row FROM (${resolvedSql}) t`
-  const raw = await execAll(conn, wrappedSql)
+
+  async function run(): Promise<Record<string, unknown>[]> {
+    return execAll(getConnection(), wrappedSql)
+  }
+
+  let raw: Record<string, unknown>[]
+  try {
+    raw = await run()
+  } catch (err) {
+    // Vercel freezes containers between requests; the DuckDB connection can
+    // become stale after thaw. Reset and retry once on connection errors.
+    const msg = err instanceof Error ? err.message : ''
+    if (msg.includes('Connection') || msg.includes('connection')) {
+      resetConnection()
+      raw = await run()
+    } else {
+      throw err
+    }
+  }
 
   const rows = raw.map((r) => JSON.parse(r._row as string) as T)
   const schema =
