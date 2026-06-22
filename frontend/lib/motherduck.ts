@@ -3,19 +3,15 @@ import type { QueryResult } from './databricks'
 
 const TOKEN = process.env.MOTHERDUCK_TOKEN!
 
-// Singleton connection — reused across requests in the same serverless instance.
-let _connPromise: Promise<Awaited<ReturnType<DuckDBInstance['connect']>>> | null = null
+// Cache the instance (expensive MotherDuck handshake) but open a fresh
+// connection per query — DuckDB allows only one active statement per connection.
+let _instancePromise: Promise<DuckDBInstance> | null = null
 
-async function getConnection() {
-  if (!_connPromise) {
-    _connPromise = (async () => {
-      const instance = await DuckDBInstance.create(`md:transit`, {
-        motherduck_token: TOKEN,
-      })
-      return instance.connect()
-    })()
+function getInstance(): Promise<DuckDBInstance> {
+  if (!_instancePromise) {
+    _instancePromise = DuckDBInstance.create('md:transit', { motherduck_token: TOKEN })
   }
-  return _connPromise
+  return _instancePromise
 }
 
 export async function queryMotherDuck<T = Record<string, unknown>>(
@@ -33,16 +29,17 @@ export async function queryMotherDuck<T = Record<string, unknown>>(
     resolvedSql = resolvedSql.replaceAll(`:${key}`, escaped)
   }
 
-  const conn = await getConnection()
-  const reader = await conn.runAndReadAll(resolvedSql)
-
-  // getRowObjectsJson() returns JSON-serializable values — BigInt columns
-  // (COUNT, SUM) are converted to strings rather than crashing the serializer.
-  const rows = reader.getRowObjectsJson() as T[]
-  const schema =
-    rows.length > 0
-      ? Object.keys(rows[0] as object).map((name) => ({ name, type_text: 'STRING' }))
-      : []
-
-  return { rows, schema }
+  const instance = await getInstance()
+  const conn = await instance.connect()
+  try {
+    const reader = await conn.runAndReadAll(resolvedSql)
+    const rows = reader.getRowObjectsJson() as T[]
+    const schema =
+      rows.length > 0
+        ? Object.keys(rows[0] as object).map((name) => ({ name, type_text: 'STRING' }))
+        : []
+    return { rows, schema }
+  } finally {
+    conn.disconnectSync()
+  }
 }
