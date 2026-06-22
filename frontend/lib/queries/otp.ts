@@ -58,25 +58,26 @@ function otpCols(alias = 'f') {
   const onTime  = `(${a}.arrival_delay_seconds BETWEEN -60 AND 360 OR (${a}.arrival_delay_seconds < -60 AND COALESCE(${a}.early_allowed, 0) = 1))`
   const late    = `${a}.arrival_delay_seconds > 360`
   return `
-    ROUND(AVG(CASE WHEN ${early}  THEN 1.0 ELSE 0.0 END) * 100, 1) AS early_pct,
-    ROUND(AVG(CASE WHEN ${onTime} THEN 1.0 ELSE 0.0 END) * 100, 1) AS on_time_pct,
-    ROUND(AVG(CASE WHEN ${late}   THEN 1.0 ELSE 0.0 END) * 100, 1) AS late_pct,
-    ROUND(AVG(${a}.arrival_delay_seconds) / 60.0, 1)                 AS avg_delay_min,
-    ROUND(PERCENTILE_APPROX(${a}.arrival_delay_seconds, 0.9) / 60.0, 1) AS p90_delay_min`
+    ROUND((AVG(CASE WHEN ${early}  THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1) AS early_pct,
+    ROUND((AVG(CASE WHEN ${onTime} THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1) AS on_time_pct,
+    ROUND((AVG(CASE WHEN ${late}   THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1) AS late_pct,
+    ROUND((AVG(${a}.arrival_delay_seconds) / 60.0)::numeric, 1)                AS avg_delay_min,
+    ROUND((PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY ${a}.arrival_delay_seconds) / 60.0)::numeric, 1) AS p90_delay_min`
 }
 
 // ── Static data ───────────────────────────────────────────────────────────────
 
 export const ROUTES_WITH_DATA_SQL = `
-  SELECT DISTINCT
+  SELECT
     r.route_id,
     r.route_short_name,
     r.route_long_name,
     r.route_type
   FROM silver_dim_route r
   INNER JOIN gold_stop_dwell_fact f ON r.route_id = f.route_id
+  GROUP BY r.route_id, r.route_short_name, r.route_long_name, r.route_type
   ORDER BY
-    CASE WHEN r.route_short_name RLIKE '^[0-9]+$'
+    CASE WHEN r.route_short_name ~ '^[0-9]+$'
          THEN CAST(r.route_short_name AS INT) ELSE 9999 END,
     r.route_short_name
 `
@@ -120,9 +121,9 @@ export function otpTrendSql(groupName: string | null, timepointOnly: boolean, ex
     ${tc ? `WITH${tc}` : ''}
     SELECT
       f.service_date,
-      ROUND(AVG(CASE WHEN ${EARLY}   THEN 1.0 ELSE 0.0 END) * 100, 1) AS early_pct,
-      ROUND(AVG(CASE WHEN ${ON_TIME} THEN 1.0 ELSE 0.0 END) * 100, 1) AS on_time_pct,
-      ROUND(AVG(CASE WHEN ${LATE}    THEN 1.0 ELSE 0.0 END) * 100, 1) AS late_pct,
+      ROUND((AVG(CASE WHEN ${EARLY}   THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1) AS early_pct,
+      ROUND((AVG(CASE WHEN ${ON_TIME} THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1) AS on_time_pct,
+      ROUND((AVG(CASE WHEN ${LATE}    THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1) AS late_pct,
       COUNT(*) AS total_stops
     FROM gold_stop_dwell_fact f
     ${groupJoin}
@@ -211,12 +212,11 @@ export function timeOfDaySql(routeId: string, direction: 0 | 1 | 'both', timepoi
   return `
     ${tc ? `WITH${tc}` : ''}
     SELECT
-      DATE_FORMAT(
-        TIMESTAMPADD(MINUTE,
-          FLOOR(MINUTE(TIMESTAMPADD(HOUR, -7, f.actual_arrival_ts)) / 15) * 15
-            - MINUTE(TIMESTAMPADD(HOUR, -7, f.actual_arrival_ts)),
-          TIMESTAMPADD(HOUR, -7, f.actual_arrival_ts)),
-        'HH:mm')                                                       AS time_bucket,
+      strftime(
+        DATE_TRUNC('hour', f.actual_arrival_ts - INTERVAL '7 hours')
+        + FLOOR(EXTRACT(MINUTE FROM f.actual_arrival_ts - INTERVAL '7 hours') / 15)::int
+          * INTERVAL '15 minutes',
+        '%H:%M')                                                       AS time_bucket,
       SUM(CASE WHEN ${EARLY}   THEN 1 ELSE 0 END)                      AS early_count,
       SUM(CASE WHEN ${ON_TIME} THEN 1 ELSE 0 END)                      AS on_time_count,
       SUM(CASE WHEN ${LATE}    THEN 1 ELSE 0 END)                      AS late_count,
@@ -240,8 +240,8 @@ export function stopOtpSql(routeId: string, direction: 0 | 1 | 'both', timepoint
   const dirFilter = direction === 'both' ? '' : `AND f.direction_id = ${direction}`
   const id = routeId.replace(/'/g, "''")
   const tpFilter = timepointOnly
-    ? 'HAVING observations >= 3 AND COALESCE(tp.timepoint, 0) = 1'
-    : 'HAVING observations >= 3'
+    ? 'HAVING COUNT(*) >= 3 AND COALESCE(tp.timepoint, 0) = 1'
+    : 'HAVING COUNT(*) >= 3'
   const tc = terminalCte(excludeTerminals)
   return `
     WITH tp AS (
@@ -256,11 +256,11 @@ export function stopOtpSql(routeId: string, direction: 0 | 1 | 'both', timepoint
       COALESCE(tp.timepoint, 0)                                          AS timepoint,
       MIN(f.stop_sequence)                                               AS stop_order,
       COUNT(*)                                                           AS observations,
-      ROUND(AVG(CASE WHEN ${EARLY}   THEN 1.0 ELSE 0.0 END) * 100, 1)  AS early_pct,
-      ROUND(AVG(CASE WHEN ${ON_TIME} THEN 1.0 ELSE 0.0 END) * 100, 1)  AS on_time_pct,
-      ROUND(AVG(CASE WHEN ${LATE}    THEN 1.0 ELSE 0.0 END) * 100, 1)  AS late_pct,
-      ROUND(AVG(f.arrival_delay_seconds) / 60.0, 1)                     AS avg_delay_min,
-      ROUND(PERCENTILE_APPROX(f.arrival_delay_seconds, 0.9) / 60.0, 1) AS p90_delay_min
+      ROUND((AVG(CASE WHEN ${EARLY}   THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1)  AS early_pct,
+      ROUND((AVG(CASE WHEN ${ON_TIME} THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1)  AS on_time_pct,
+      ROUND((AVG(CASE WHEN ${LATE}    THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1)  AS late_pct,
+      ROUND((AVG(f.arrival_delay_seconds) / 60.0)::numeric, 1)                     AS avg_delay_min,
+      ROUND((PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY f.arrival_delay_seconds) / 60.0)::numeric, 1) AS p90_delay_min
     FROM gold_stop_dwell_fact f
     LEFT JOIN silver_dim_stop s ON f.stop_id = s.stop_id
     LEFT JOIN tp ON f.stop_id = tp.stop_id
@@ -315,9 +315,9 @@ export function singleRouteTrendSql(routeId: string, direction: 0 | 1 | 'both', 
     ${tc ? `WITH${tc}` : ''}
     SELECT
       f.service_date,
-      ROUND(AVG(CASE WHEN ${EARLY}   THEN 1.0 ELSE 0.0 END) * 100, 1) AS early_pct,
-      ROUND(AVG(CASE WHEN ${ON_TIME} THEN 1.0 ELSE 0.0 END) * 100, 1) AS on_time_pct,
-      ROUND(AVG(CASE WHEN ${LATE}    THEN 1.0 ELSE 0.0 END) * 100, 1) AS late_pct,
+      ROUND((AVG(CASE WHEN ${EARLY}   THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1) AS early_pct,
+      ROUND((AVG(CASE WHEN ${ON_TIME} THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1) AS on_time_pct,
+      ROUND((AVG(CASE WHEN ${LATE}    THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1) AS late_pct,
       COUNT(*) AS total_stops
     FROM gold_stop_dwell_fact f
     ${terminalJoin('f', excludeTerminals)}
@@ -400,8 +400,8 @@ export function topDelayedYesterdaySql(groupName: string | null, timepointOnly: 
       r.route_short_name,
       r.route_long_name,
       COUNT(*)                                                                   AS total_stops,
-      ROUND(AVG(CASE WHEN ${ON_TIME} THEN 1.0 ELSE 0.0 END) * 100, 1)          AS on_time_pct,
-      ROUND(AVG(f.arrival_delay_seconds) / 60.0, 1)                             AS avg_delay_min
+      ROUND((AVG(CASE WHEN ${ON_TIME} THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1) AS on_time_pct,
+      ROUND((AVG(f.arrival_delay_seconds) / 60.0)::numeric, 1)                  AS avg_delay_min
     FROM gold_stop_dwell_fact f
     JOIN silver_dim_route r ON f.route_id = r.route_id
     ${groupJoin}
@@ -431,7 +431,7 @@ export function scheduleMissedSql(routeId: string) {
       trip_id,
       direction_id,
       trip_headsign,
-      UNIX_TIMESTAMP(planned_start_ts) * 1000  AS planned_start_ms
+      EXTRACT(EPOCH FROM planned_start_ts)::bigint * 1000  AS planned_start_ms
     FROM gold_missed_trips
     WHERE service_date = :serviceDate
       AND route_id = '${id}'
@@ -451,8 +451,8 @@ export function missedTripsSummarySql(groupName: string | null) {
       SUM(CASE WHEN observation_status = 'partial'  THEN 1 ELSE 0 END)    AS partial_count,
       SUM(CASE WHEN observation_status = 'missed'   THEN 1 ELSE 0 END)    AS missed_count,
       ROUND(
-        SUM(CASE WHEN observation_status IN ('complete','partial') THEN 1 ELSE 0 END)
-        * 100.0 / NULLIF(COUNT(*), 0), 1
+        (SUM(CASE WHEN observation_status IN ('complete','partial') THEN 1 ELSE 0 END)
+        * 100.0 / NULLIF(COUNT(*), 0))::numeric, 1
       )                                                                     AS fleet_completion_pct
     FROM gold_missed_trips m
     ${groupJoin}
@@ -474,7 +474,7 @@ export function missedTripsListSql(groupName: string | null) {
       m.completion_pct,
       m.scheduled_stop_count,
       m.observed_stop_count,
-      UNIX_TIMESTAMP(m.planned_start_ts) * 1000  AS planned_start_ms
+      EXTRACT(EPOCH FROM m.planned_start_ts)::bigint * 1000  AS planned_start_ms
     FROM gold_missed_trips m
     LEFT JOIN silver_dim_route r ON m.route_id = r.route_id
     ${groupJoin}

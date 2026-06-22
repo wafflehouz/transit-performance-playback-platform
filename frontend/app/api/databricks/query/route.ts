@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { queryDatabricks } from '@/lib/databricks'
+import { queryMotherDuck as queryDatabricks } from '@/lib/motherduck'
 
 export async function POST(request: NextRequest) {
   // Require authenticated session

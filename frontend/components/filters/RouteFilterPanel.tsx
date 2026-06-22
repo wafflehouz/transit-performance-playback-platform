@@ -26,8 +26,11 @@ function toYMD(d: Date): string {
 }
 
 export function resolveDates(preset: DatePreset): { startDate: string; endDate: string } {
-  const end = new Date()
-  end.setDate(end.getDate() - 1) // yesterday in local time
+  // When running against a static snapshot, NEXT_PUBLIC_DATA_END_DATE pins the
+  // anchor so presets count back from the last date that has data rather than yesterday.
+  const anchor = process.env.NEXT_PUBLIC_DATA_END_DATE
+  const end = anchor ? new Date(anchor + 'T12:00:00') : new Date()
+  if (!anchor) end.setDate(end.getDate() - 1) // yesterday in local time
   const start = new Date(end)
   const days = preset === '1d' ? 0 : preset === '7d' ? 6 : preset === '14d' ? 13 : 27
   start.setDate(start.getDate() - days)

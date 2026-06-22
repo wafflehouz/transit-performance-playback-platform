@@ -74,7 +74,7 @@ export function trafficCongestionSql(h3Indices: string[]) {
   const inList = h3Indices.map((h) => `'${BigInt('0x' + h).toString()}'`).join(', ')
   return `
     SELECT
-      UNIX_TIMESTAMP(time_bucket_15min) * 1000  AS bucket_ms,
+      EXTRACT(EPOCH FROM time_bucket_15min)::bigint * 1000  AS bucket_ms,
       h3_index,
       congestion_level,
       avg_speed_mps,

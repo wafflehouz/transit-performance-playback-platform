@@ -1,9 +1,9 @@
-import { queryDatabricks } from '@/lib/databricks'
+import { queryMotherDuck as queryDatabricks } from '@/lib/motherduck'
 import type { RouteMetrics15Min, DimRoute } from '@/types'
 
 export async function getRoutes(): Promise<DimRoute[]> {
   const result = await queryDatabricks<DimRoute>(`
-    SELECT DISTINCT
+    SELECT
       r.route_id,
       r.route_short_name,
       r.route_long_name,
@@ -11,8 +11,9 @@ export async function getRoutes(): Promise<DimRoute[]> {
       r.route_color
     FROM silver_dim_route r
     INNER JOIN gold_route_metrics_15min m ON r.route_id = m.route_id
+    GROUP BY r.route_id, r.route_short_name, r.route_long_name, r.route_type, r.route_color
     ORDER BY
-      CASE WHEN r.route_short_name RLIKE '^[0-9]+$' THEN CAST(r.route_short_name AS INT) ELSE 9999 END,
+      CASE WHEN r.route_short_name ~ '^[0-9]+$' THEN CAST(r.route_short_name AS INT) ELSE 9999 END,
       r.route_short_name
   `)
   return result.rows

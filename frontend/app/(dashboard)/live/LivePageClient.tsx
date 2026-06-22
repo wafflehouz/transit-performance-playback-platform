@@ -157,14 +157,28 @@ export default function LivePageClient() {
 
   // ── Step 1: fetch active route IDs + group names on mount ─────────────────
   useEffect(() => {
+    const loadFromSnapshot = () =>
+      fetch('/api/databricks/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sql: 'SELECT route_id FROM silver_dim_route ORDER BY route_id' }),
+      })
+        .then((r) => r.json())
+        .then((d: { rows?: Array<{ route_id: string }> }) => {
+          setRouteIds(d.rows?.map((r) => r.route_id) ?? [])
+          setRouteNamesLoading(true)
+        })
+        .catch(() => {})
+        .finally(() => setRoutesLoading(false))
+
     fetch(`${RENDER_API}/vehicles/routes`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((d: { route_ids: string[] }) => {
         setRouteIds(d.route_ids ?? [])
         setRouteNamesLoading(true)
+        setRoutesLoading(false)
       })
-      .catch(() => {})
-      .finally(() => setRoutesLoading(false))
+      .catch(loadFromSnapshot)
 
     fetch('/api/databricks/query', {
       method:  'POST',
@@ -255,7 +269,7 @@ export default function LivePageClient() {
           SELECT sp.shape_pt_sequence AS stop_sequence,
             sp.shape_id               AS stop_id,
             bt.route_id,
-            CAST(NULL AS STRING)      AS stop_name,
+            CAST(NULL AS VARCHAR)     AS stop_name,
             sp.shape_pt_lat           AS lat,
             sp.shape_pt_lon           AS lon,
             bt.direction_id

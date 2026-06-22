@@ -31,7 +31,7 @@ export const LIVE_VEHICLES_SQL = `
       v.event_ts,
       ROW_NUMBER() OVER (PARTITION BY v.vehicle_id ORDER BY v.event_ts DESC) AS rn
     FROM silver_fact_vehicle_positions v
-    WHERE v.service_date = TO_DATE(FROM_UTC_TIMESTAMP(CURRENT_TIMESTAMP, 'America/Phoenix'))
+    WHERE v.service_date = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Phoenix')::date
   )
   SELECT
     l.vehicle_id,
@@ -43,7 +43,7 @@ export const LIVE_VEHICLES_SQL = `
     l.lon,
     l.bearing,
     l.speed_mps,
-    CAST(l.event_ts AS STRING) AS event_ts
+    l.event_ts::text AS event_ts
   FROM latest l
   LEFT JOIN silver_dim_route r ON l.route_id = r.route_id
   LEFT JOIN silver_dim_trip t ON l.trip_id = t.trip_id
@@ -57,12 +57,12 @@ export const LIVE_STATS_SQL = `
     SELECT vehicle_id, route_id, speed_mps, event_ts,
       ROW_NUMBER() OVER (PARTITION BY vehicle_id ORDER BY event_ts DESC) AS rn
     FROM silver_fact_vehicle_positions
-    WHERE service_date = TO_DATE(FROM_UTC_TIMESTAMP(CURRENT_TIMESTAMP, 'America/Phoenix'))
+    WHERE service_date = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Phoenix')::date
   )
   SELECT
     COUNT(*)                          AS total_vehicles,
     COUNT(DISTINCT route_id)          AS routes_active,
     ROUND(AVG(speed_mps), 2)          AS avg_speed_mps,
-    CAST(MAX(event_ts) AS STRING)     AS last_updated
+    MAX(event_ts)::text               AS last_updated
   FROM latest WHERE rn = 1
 `

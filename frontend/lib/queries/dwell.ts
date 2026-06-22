@@ -49,11 +49,12 @@ function timepointWhere(timepointOnly: boolean, alias = 'f') {
 // ── Static data ───────────────────────────────────────────────────────────────
 
 export const DWELL_ROUTES_SQL = `
-  SELECT DISTINCT r.route_id, r.route_short_name, r.route_long_name, r.route_type
+  SELECT r.route_id, r.route_short_name, r.route_long_name, r.route_type
   FROM silver_dim_route r
   INNER JOIN gold_stop_dwell_fact f ON r.route_id = f.route_id
+  GROUP BY r.route_id, r.route_short_name, r.route_long_name, r.route_type
   ORDER BY
-    CASE WHEN r.route_short_name RLIKE '^[0-9]+$' THEN CAST(r.route_short_name AS INT) ELSE 9999 END,
+    CASE WHEN r.route_short_name ~ '^[0-9]+$' THEN CAST(r.route_short_name AS INT) ELSE 9999 END,
     r.route_short_name
 `
 
@@ -83,9 +84,9 @@ export function dwellSummarySql(
     SELECT
       COUNT(DISTINCT i.route_id)                                          AS route_count,
       COUNT(*)                                                            AS observation_count,
-      ROUND(AVG(i.dwell_seconds), 0)                                     AS avg_actual_sec,
-      ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.5), 0)                  AS p50_actual_sec,
-      ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.9), 0)                  AS p90_actual_sec,
+      ROUND(AVG(i.dwell_seconds)::numeric, 0)                            AS avg_actual_sec,
+      ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY i.dwell_seconds)::numeric, 0) AS p50_actual_sec,
+      ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY i.dwell_seconds)::numeric, 0) AS p90_actual_sec,
       SUM(CASE WHEN i.dwell_seconds > 120 THEN 1 ELSE 0 END)            AS stops_over_2min
     FROM gold_stop_dwell_inferred i
     ${t.join}
@@ -124,7 +125,7 @@ export function dwellBucketSql(
         ELSE 'Outlier (120s+)'
       END                 AS dwell_bucket,
       COUNT(*)            AS stop_events,
-      ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS pct_of_total
+      ROUND((COUNT(*) * 100.0 / SUM(COUNT(*)) OVER ())::numeric, 1) AS pct_of_total
     FROM gold_stop_dwell_inferred i
     ${t.join}
     ${gj}
@@ -161,8 +162,8 @@ export function topInflationStopsSql(
       COALESCE(s.stop_name, i.stop_id)                                   AS stop_name,
       i.route_id,
       COUNT(*)                                                            AS observations,
-      ROUND(AVG(i.dwell_seconds), 0)                                     AS avg_actual_sec,
-      ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.9), 0)                  AS p90_actual_sec
+      ROUND(AVG(i.dwell_seconds)::numeric, 0)                            AS avg_actual_sec,
+      ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY i.dwell_seconds)::numeric, 0) AS p90_actual_sec
     FROM gold_stop_dwell_inferred i
     LEFT JOIN silver_dim_stop s ON i.stop_id = s.stop_id
     ${t.join}
@@ -173,7 +174,7 @@ export function topInflationStopsSql(
     ${tp}
     ${t.where}
     GROUP BY i.stop_id, COALESCE(s.stop_name, i.stop_id), i.route_id
-    HAVING observations >= 3
+    HAVING COUNT(*) >= 3
     ORDER BY avg_actual_sec DESC
     LIMIT ${limit}
   `
@@ -196,9 +197,9 @@ export function dwellByRouteSql(
       r.route_short_name,
       r.route_long_name,
       COUNT(*)                                                            AS total_stops,
-      ROUND(AVG(f.actual_dwell_seconds), 0)                              AS avg_actual_sec,
-      ROUND(AVG(f.dwell_delta_seconds), 0)                               AS avg_delta_sec,
-      ROUND(PERCENTILE_APPROX(f.actual_dwell_seconds, 0.9), 0)           AS p90_actual_sec,
+      ROUND(AVG(f.actual_dwell_seconds)::numeric, 0)                     AS avg_actual_sec,
+      ROUND(AVG(f.dwell_delta_seconds)::numeric, 0)                      AS avg_delta_sec,
+      ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY f.actual_dwell_seconds)::numeric, 0) AS p90_actual_sec,
       SUM(CASE WHEN f.actual_dwell_seconds > 120 THEN 1 ELSE 0 END)     AS stops_over_2min
     FROM gold_stop_dwell_fact f
     JOIN silver_dim_route r ON f.route_id = r.route_id
@@ -273,14 +274,14 @@ export function stopProfileSql(
     WITH ${ctes.join(',\n')}
     SELECT
       i.direction_id,
-      COALESCE(h.trip_headsign, CONCAT('Dir ', CAST(i.direction_id AS STRING))) AS direction_label,
+      COALESCE(h.trip_headsign, CONCAT('Dir ', i.direction_id::text)) AS direction_label,
       i.stop_id,
       COALESCE(s.stop_name, i.stop_id)                                   AS stop_name,
       COALESCE(cs.seq, MIN(i.stop_sequence))                             AS stop_sequence,
       COUNT(*)                                                            AS observations,
-      ROUND(AVG(i.dwell_seconds), 0)                                     AS avg_dwell_sec,
-      ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.5), 0)                  AS p50_dwell_sec,
-      ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.9), 0)                  AS p90_dwell_sec
+      ROUND(AVG(i.dwell_seconds)::numeric, 0)                            AS avg_dwell_sec,
+      ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY i.dwell_seconds)::numeric, 0) AS p50_dwell_sec,
+      ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY i.dwell_seconds)::numeric, 0) AS p90_dwell_sec
     FROM gold_stop_dwell_inferred i
     ${excludeTerminals ? 'INNER JOIN trip_bounds tb ON i.trip_id = tb.trip_id' : ''}
     LEFT JOIN silver_dim_stop s ON i.stop_id = s.stop_id
@@ -291,9 +292,9 @@ export function stopProfileSql(
     ${dirFilter}
     ${excludeTerminals ? 'AND i.stop_sequence != tb.first_seq AND i.stop_sequence != tb.last_seq' : ''}
     GROUP BY i.direction_id,
-      COALESCE(h.trip_headsign, CONCAT('Dir ', CAST(i.direction_id AS STRING))),
+      COALESCE(h.trip_headsign, CONCAT('Dir ', i.direction_id::text)),
       i.stop_id, COALESCE(s.stop_name, i.stop_id), cs.seq
-    HAVING observations >= 3
+    HAVING COUNT(*) >= 3
     ORDER BY i.direction_id, COALESCE(cs.seq, MIN(i.stop_sequence))
   `
 }
@@ -341,11 +342,11 @@ export function tripMatrixSql(
     SELECT
       i.trip_id,
       i.direction_id,
-      COALESCE(h.trip_headsign, CONCAT('Dir ', CAST(i.direction_id AS STRING))) AS direction_label,
+      COALESCE(h.trip_headsign, CONCAT('Dir ', i.direction_id::text)) AS direction_label,
       i.stop_sequence,
       i.stop_id,
       COALESCE(s.stop_name, i.stop_id)                                   AS stop_name,
-      ROUND(AVG(i.dwell_seconds), 0)                                     AS avg_dwell_sec,
+      ROUND(AVG(i.dwell_seconds)::numeric, 0)                            AS avg_dwell_sec,
       COUNT(DISTINCT i.service_date)                                     AS days_observed,
       MAX(fs.first_scheduled_ts)                                         AS first_scheduled_ts
     FROM gold_stop_dwell_inferred i
@@ -358,9 +359,9 @@ export function tripMatrixSql(
     ${dirFilter}
     ${excludeTerminals ? 'AND i.stop_sequence != tb.first_seq AND i.stop_sequence != tb.last_seq' : ''}
     GROUP BY i.trip_id, i.direction_id,
-      COALESCE(h.trip_headsign, CONCAT('Dir ', CAST(i.direction_id AS STRING))),
+      COALESCE(h.trip_headsign, CONCAT('Dir ', i.direction_id::text)),
       i.stop_sequence, i.stop_id, COALESCE(s.stop_name, i.stop_id)
-    HAVING days_observed >= 1
+    HAVING COUNT(DISTINCT i.service_date) >= 1
     ORDER BY i.direction_id, MAX(fs.first_scheduled_ts), i.trip_id, i.stop_sequence
   `
 }
@@ -379,9 +380,9 @@ export function dwellTodSql(
   return `
     ${t.cte}
     SELECT
-      MOD(HOUR(TIMESTAMPADD(HOUR, -7, i.inferred_arrival_ts)) + 24, 24) AS phoenix_hour,
-      ROUND(AVG(i.dwell_seconds), 0)                                     AS avg_dwell_sec,
-      ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.9), 0)                  AS p90_dwell_sec,
+      MOD(EXTRACT(HOUR FROM i.inferred_arrival_ts - INTERVAL '7 hours')::int + 24, 24) AS phoenix_hour,
+      ROUND(AVG(i.dwell_seconds)::numeric, 0)                            AS avg_dwell_sec,
+      ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY i.dwell_seconds)::numeric, 0) AS p90_dwell_sec,
       COUNT(*)                                                            AS observations
     FROM gold_stop_dwell_inferred i
     ${t.join}
@@ -391,7 +392,7 @@ export function dwellTodSql(
     ${dirWhere(direction, 'i')}
     ${t.where}
     GROUP BY phoenix_hour
-    HAVING observations >= 5
+    HAVING COUNT(*) >= 5
     ORDER BY phoenix_hour
   `
 }
@@ -411,14 +412,14 @@ export function dwellTrendSql(
     ${t.cte}
     SELECT
       i.service_date,
-      ROUND(AVG(i.dwell_seconds), 0)                                     AS avg_dwell_sec,
-      ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.5), 0)                  AS p50_dwell_sec,
-      ROUND(PERCENTILE_APPROX(i.dwell_seconds, 0.9), 0)                  AS p90_dwell_sec,
+      ROUND(AVG(i.dwell_seconds)::numeric, 0)                            AS avg_dwell_sec,
+      ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY i.dwell_seconds)::numeric, 0) AS p50_dwell_sec,
+      ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY i.dwell_seconds)::numeric, 0) AS p90_dwell_sec,
       COUNT(*)                                                            AS events
     FROM gold_stop_dwell_inferred i
     ${t.join}
     ${gj}
-    WHERE i.service_date >= DATE_ADD(:endDate, -29) AND i.service_date <= :endDate
+    WHERE i.service_date >= :endDate::date - 29 AND i.service_date <= :endDate
     ${routeFilter}
     ${t.where}
     GROUP BY i.service_date
