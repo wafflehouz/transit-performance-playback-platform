@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { queryMotherDuck as queryDatabricks } from '@/lib/motherduck'
 
 export async function POST(request: NextRequest) {
   // Require authenticated session
@@ -18,10 +17,14 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await queryDatabricks(sql, params ?? {})
+    // Dynamic import keeps any native-addon load failure inside the try-catch
+    // so errors are returned as JSON rather than an HTML 500 from Next.js.
+    const { queryMotherDuck } = await import('@/lib/motherduck')
+    const result = await queryMotherDuck(sql, params ?? {})
     return NextResponse.json(result)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
+    console.error('[/api/databricks/query]', message)
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
