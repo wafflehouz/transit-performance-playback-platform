@@ -1,34 +1,21 @@
+import { DuckDBInstance } from '@duckdb/node-api'
 import type { QueryResult } from './databricks'
 
 const TOKEN = process.env.MOTHERDUCK_TOKEN!
 
-// Top-level import of duckdb causes Turbopack to parse duckdb's node-pre-gyp
-// package.json at build time, which crashes because duckdb omits napi_versions.
-// /* turbopack-ignore */ prevents Turbopack from following this require at all;
-// serverExternalPackages ensures webpack/Vercel still traces the native binary.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const duckdb = require(/* turbopack-ignore */ 'duckdb') as typeof import('duckdb')
+// Singleton connection — reused across requests in the same serverless instance.
+let _connPromise: Promise<Awaited<ReturnType<DuckDBInstance['connect']>>> | null = null
 
-let _db: InstanceType<typeof duckdb.Database> | null = null
-let _conn: ReturnType<InstanceType<typeof duckdb.Database>['connect']> | null = null
-
-function getConnection(): ReturnType<InstanceType<typeof duckdb.Database>['connect']> {
-  if (!_conn) {
-    _db = new duckdb.Database(`md:transit?motherduck_token=${TOKEN}`)
-    _conn = _db.connect()
+async function getConnection() {
+  if (!_connPromise) {
+    _connPromise = (async () => {
+      const instance = await DuckDBInstance.create(`md:transit`, {
+        motherduck_token: TOKEN,
+      })
+      return instance.connect()
+    })()
   }
-  return _conn
-}
-
-type DuckDBConnection = ReturnType<InstanceType<typeof duckdb.Database>['connect']>
-
-function execAll(conn: DuckDBConnection, sql: string): Promise<Record<string, unknown>[]> {
-  return new Promise((resolve, reject) => {
-    conn.all(sql, (err: Error | null, rows: Record<string, unknown>[]) => {
-      if (err) reject(err)
-      else resolve(rows)
-    })
-  })
+  return _connPromise
 }
 
 export async function queryMotherDuck<T = Record<string, unknown>>(
@@ -46,15 +33,12 @@ export async function queryMotherDuck<T = Record<string, unknown>>(
     resolvedSql = resolvedSql.replaceAll(`:${key}`, escaped)
   }
 
-  const conn = getConnection()
+  const conn = await getConnection()
+  const reader = await conn.runAndReadAll(resolvedSql)
 
-  // Wrap in to_json() so that DuckDB serializes BigInt columns (COUNT, SUM) to
-  // JSON strings in C++ before values hit the Node.js NAPI layer.  Without this
-  // the duckdb native addon crashes with "Do not know how to serialize a BigInt".
-  const wrappedSql = `SELECT to_json(t)::VARCHAR AS _row FROM (${resolvedSql}) t`
-  const raw = await execAll(conn, wrappedSql)
-
-  const rows = raw.map((r) => JSON.parse(r._row as string) as T)
+  // getRowObjectsJson() returns JSON-serializable values — BigInt columns
+  // (COUNT, SUM) are converted to strings rather than crashing the serializer.
+  const rows = reader.getRowObjectsJson() as T[]
   const schema =
     rows.length > 0
       ? Object.keys(rows[0] as object).map((name) => ({ name, type_text: 'STRING' }))
