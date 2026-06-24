@@ -22,6 +22,13 @@ function todayMinus1(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+// DuckDB serializes timestamps as "YYYY-MM-DD HH:MM:SS" (no timezone suffix).
+// JavaScript treats timezone-naive datetime strings as LOCAL time, which
+// corrupts the ms value passed to fmtPhoenix. Appending 'Z' forces UTC parsing.
+function dbToMs(ts: string): number {
+  return new Date(ts.replace(' ', 'T') + 'Z').getTime()
+}
+
 // UTC timestamp (ms) → Phoenix local HH:MM:SS (UTC-7, no DST)
 function fmtPhoenix(ms: number, withSeconds = true): string {
   const d = new Date(ms - 7 * 3600 * 1000)
@@ -36,7 +43,7 @@ function fmtPhoenix(ms: number, withSeconds = true): string {
 
 function fmtTimestamp(ts: string | null): string {
   if (!ts) return '—'
-  return fmtPhoenix(new Date(ts).getTime(), false)
+  return fmtPhoenix(dbToMs(ts), false)
 }
 
 function fmtDelay(s: number | null, _pickupType: number): string {
@@ -197,12 +204,12 @@ export default function PlaybackPageClient() {
   useEffect(() => {
     const tb = timeBucketParam.current
     if (tripList.length === 0 || !tb || selectedTripId) return
-    const targetMs = new Date(tb).getTime()
+    const targetMs = dbToMs(tb)
     let best = tripList[0]
     let bestDiff = Infinity
     for (const t of tripList) {
-      const firstMs = new Date(t.first_ts).getTime()
-      const lastMs  = new Date(t.last_ts).getTime()
+      const firstMs = dbToMs(t.first_ts)
+      const lastMs  = dbToMs(t.last_ts)
       // Exact: trip was active at this time
       if (firstMs <= targetMs && targetMs <= lastMs) { best = t; break }
       const diff = Math.min(Math.abs(firstMs - targetMs), Math.abs(lastMs - targetMs))
@@ -236,7 +243,7 @@ export default function PlaybackPageClient() {
       .then(([pathRows, sRows, vRows]) => {
         setVehicles(vRows.map((r: any) => ({ vehicle_id: String(r.vehicle_id), ping_count: Number(r.ping_count) })))
         const pts: PlaybackPoint[] = pathRows.map((r: any) => ({
-          tsMs: new Date(r.point_ts).getTime(),
+          tsMs: dbToMs(r.point_ts),
           lat: Number(r.lat),
           lon: Number(r.lon),
           bearing: r.bearing != null ? Number(r.bearing) : null,
@@ -251,7 +258,7 @@ export default function PlaybackPageClient() {
           lon: r.lon != null ? Number(r.lon) : null,
           scheduled_arrival_ts: r.scheduled_arrival_ts ?? null,
           actual_arrival_ts: r.actual_arrival_ts ?? null,
-          actual_arrival_ts_ms: r.actual_arrival_ts ? new Date(r.actual_arrival_ts).getTime() : null,
+          actual_arrival_ts_ms: r.actual_arrival_ts ? dbToMs(r.actual_arrival_ts) : null,
           arrival_delay_seconds: r.arrival_delay_seconds != null ? Number(r.arrival_delay_seconds) : null,
           pickup_type: Number(r.pickup_type ?? 0),
           dwell_seconds: r.dwell_seconds != null ? Number(r.dwell_seconds) : null,
@@ -402,7 +409,7 @@ export default function PlaybackPageClient() {
 
   function tripLabel(t: TripListRow): string {
     const ts   = t.first_timepoint_scheduled_ts ?? t.first_stop_scheduled_ts ?? t.first_ts
-    const time = fmtPhoenix(new Date(ts).getTime(), false)
+    const time = fmtPhoenix(dbToMs(ts), false)
     const head = t.trip_headsign ? `To ${t.trip_headsign}` : ''
     return [time, head].filter(Boolean).join(' · ')
   }

@@ -651,8 +651,8 @@ function TripMatrix({
   const tripFirstTs = new Map<string, string>()
   for (const r of dirData) {
     if (!tripFirstTs.has(r.trip_id) && r.first_scheduled_ts) {
-      const d = new Date(r.first_scheduled_ts)
-      const phoenixMs = d.getTime() - 7 * 3600 * 1000
+      // DuckDB returns timestamps without timezone suffix — append Z to parse as UTC
+      const phoenixMs = new Date(r.first_scheduled_ts.replace(' ', 'T') + 'Z').getTime() - 7 * 3600 * 1000
       const pd = new Date(phoenixMs)
       const h = pd.getUTCHours()
       const m = String(pd.getUTCMinutes()).padStart(2, '0')
