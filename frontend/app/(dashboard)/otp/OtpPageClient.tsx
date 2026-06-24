@@ -1240,9 +1240,10 @@ function formatDelay(sec: number | null): string {
 }
 
 function formatScheduleTime(ts: string): string {
-  // ts is a UTC timestamp; Phoenix = UTC-7 (Arizona has no DST)
+  // ts is a UTC timestamp; Phoenix = UTC-7 (Arizona has no DST).
+  // DuckDB returns timestamps without 'Z'; append it to force UTC parsing.
   try {
-    const d = new Date(ts)
+    const d = new Date(ts.includes('Z') ? ts : ts.replace(' ', 'T') + 'Z')
     const phoenixMs = d.getTime() - 7 * 3600 * 1000
     const pd = new Date(phoenixMs)
     const h = pd.getUTCHours().toString().padStart(2, '0')
