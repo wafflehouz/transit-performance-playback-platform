@@ -30,8 +30,8 @@ async function fetchRoutes(): Promise<RouteOption[]> {
         FROM silver_dim_route r
         INNER JOIN gold_stop_dwell_fact f ON r.route_id = f.route_id
         ORDER BY
-          CASE WHEN r.route_short_name RLIKE '^[0-9]+$'
-               THEN CAST(r.route_short_name AS INT) ELSE 9999 END,
+          CASE WHEN regexp_like(r.route_short_name, '^[0-9]+$')
+               THEN TRY_CAST(r.route_short_name AS INTEGER) ELSE 9999 END,
           r.route_short_name
       `,
     }),
