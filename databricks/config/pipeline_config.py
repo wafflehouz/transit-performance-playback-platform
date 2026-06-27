@@ -43,6 +43,9 @@ VEHICLE_POSITIONS_SNAPSHOTS_PATH  = f"{RAW_RT_PATH}/vehicle_positions"
 TRIP_UPDATES_CHECKPOINT      = f"{CHECKPOINT_PATH}/trip_updates"
 VEHICLE_POSITIONS_CHECKPOINT = f"{CHECKPOINT_PATH}/vehicle_positions"
 
+# Ground truth survey exports (manual uploads, not on nightly pipeline)
+GROUND_TRUTH_PATH = f"{BASE_PATH}/ground_truth"
+
 # ── API Endpoints ─────────────────────────────────────────────────────────────
 _MECATRAN_BASE = "https://mna.mecatran.com/utw/ws/gtfsfeed"
 TRIP_UPDATES_URL      = f"{_MECATRAN_BASE}/realtime/valleymetro"
