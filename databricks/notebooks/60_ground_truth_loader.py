@@ -59,7 +59,12 @@ MIN_OVERLAP_STOPS  = 2   # minimum common stops required to accept a trip_id mat
 
 try:
     file_infos = dbutils.fs.ls(GROUND_TRUTH_PATH)
-    json_files = [f.path for f in file_infos if f.name.endswith(".json")]
+    # dbutils.fs.ls returns paths prefixed with "dbfs:" but Python's open()
+    # needs a POSIX path. For Unity Catalog Volumes, strip "dbfs:" → "/Volumes/..."
+    json_files = [
+        f.path.replace("dbfs:/Volumes", "/Volumes") if f.path.startswith("dbfs:/Volumes") else f.path
+        for f in file_infos if f.name.endswith(".json")
+    ]
 except Exception as exc:
     raise RuntimeError(
         f"Cannot list {GROUND_TRUTH_PATH}: {exc}\n"
