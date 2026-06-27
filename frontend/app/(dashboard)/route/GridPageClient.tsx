@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useTransition, useCallback, useRef } from 'react'
 import { useFilterPanel } from '@/lib/filter-panel-context'
+import InfoButton from '@/components/ui/InfoButton'
 import {
   FilterSection,
   DateFilter,
@@ -144,7 +145,10 @@ export default function GridPageClient() {
       {/* Page header */}
       <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-3">
         <div>
-          <h1 className="text-base font-semibold text-white">Route Grid</h1>
+          <h1 className="text-base font-semibold text-white flex items-center gap-1.5">
+            Route Grid
+            <InfoButton section="grid" />
+          </h1>
           <p className="text-gray-500 text-xs mt-0.5">
             {isPending
               ? 'Loading…'

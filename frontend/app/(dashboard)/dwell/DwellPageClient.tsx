@@ -8,6 +8,7 @@ import {
 } from 'recharts'
 import { useFilterPanel } from '@/lib/filter-panel-context'
 import { useNav } from '@/lib/nav-context'
+import InfoButton from '@/components/ui/InfoButton'
 import RouteFilterPanel, {
   type OtpFilterState,
   type DatePreset,
@@ -264,7 +265,10 @@ export default function DwellPageClient() {
       {/* Header */}
       <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between shrink-0">
         <div>
-          <h1 className="text-base font-semibold text-white">Dwell Analysis</h1>
+          <h1 className="text-base font-semibold text-white flex items-center gap-1.5">
+              Dwell Analysis
+              <InfoButton section="dwell" />
+            </h1>
           <p className="text-gray-500 text-xs mt-0.5">
             {loading ? 'Loading…' : `${scopeLabel} · ${dateLabel}`}
           </p>
