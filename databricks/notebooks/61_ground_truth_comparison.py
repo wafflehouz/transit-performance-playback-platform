@@ -43,7 +43,13 @@ from delta.tables import DeltaTable
 
 GT_TABLE         = f"{CATALOG}.{SCHEMA}.gold_rail_ground_truth"
 DWELL_TABLE      = f"{CATALOG}.{SCHEMA}.gold_stop_dwell_fact"
+STOP_TABLE       = f"{CATALOG}.{SCHEMA}.silver_dim_stop"
 COMPARISON_TABLE = f"{CATALOG}.{SCHEMA}.gold_rail_ground_truth_comparison"
+
+# Rows where the survey GPS position is more than this distance from the recorded
+# stop_id's known coordinates are flagged as suspect — likely a "forgot to advance
+# the stop" data entry error in the iOS app.
+SUSPECT_GPS_DISTANCE_M = 150.0
 
 # COMMAND ----------
 
@@ -87,15 +93,49 @@ print(f"Pipeline rows for matching dates: {pipeline.count()}")
 
 # COMMAND ----------
 
+# MAGIC %md ## Step 2b — Load stop coordinates for GPS validation
+
+# COMMAND ----------
+
+# silver_dim_stop uses lat/lon columns (not stop_lat/stop_lon)
+stop_coords = (
+    spark.table(STOP_TABLE)
+    .select(
+        F.col("stop_id").alias("ref_stop_id"),
+        F.col("lat").alias("stop_lat"),
+        F.col("lon").alias("stop_lon"),
+    )
+)
+
+# COMMAND ----------
+
 # MAGIC %md ## Step 3 — Join and compute error metrics
 
 # COMMAND ----------
+
+_R_METERS = F.lit(6_371_000.0)
+
+def _haversine_m(lat1, lon1, lat2, lon2):
+    """Haversine distance in metres between two GPS points (Spark column expressions)."""
+    dlat = F.radians(lat2 - lat1)
+    dlon = F.radians(lon2 - lon1)
+    a = (
+        F.sin(dlat / 2) ** 2
+        + F.cos(F.radians(lat1)) * F.cos(F.radians(lat2)) * F.sin(dlon / 2) ** 2
+    )
+    return _R_METERS * 2 * F.asin(F.sqrt(a))
 
 comparison = (
     gt.alias("gt")
     .join(
         pipeline.alias("p"),
         on=["service_date", "gtfs_trip_id", "stop_sequence"],
+        how="left",
+    )
+    # Join known stop coordinates on the survey's recorded stop_id
+    .join(
+        stop_coords.alias("s"),
+        F.col("gt.stop_id") == F.col("s.ref_stop_id"),
         how="left",
     )
     .select(
@@ -143,12 +183,38 @@ comparison = (
                 - F.unix_timestamp("p.pipeline_actual_arrival_ts")
             ).cast("int"),
         ).alias("timing_abs_error_seconds"),
+        # GPS position vs known stop location
+        F.when(
+            F.col("gt.survey_lat").isNotNull()
+            & F.col("s.stop_lat").isNotNull(),
+            F.round(
+                _haversine_m(
+                    F.col("gt.survey_lat"), F.col("gt.survey_lon"),
+                    F.col("s.stop_lat"),    F.col("s.stop_lon"),
+                ),
+                1,
+            ),
+        ).alias("gps_stop_distance_m"),
+        # Suspect flag: survey GPS was too far from the recorded stop_id.
+        # Most likely cause is the surveyor forgetting to advance to the next stop
+        # in the app — the physical location matches a different stop.
+        F.when(
+            F.col("gt.survey_lat").isNotNull() & F.col("s.stop_lat").isNotNull(),
+            _haversine_m(
+                F.col("gt.survey_lat"), F.col("gt.survey_lon"),
+                F.col("s.stop_lat"),    F.col("s.stop_lon"),
+            ) > F.lit(SUSPECT_GPS_DISTANCE_M),
+        ).otherwise(F.lit(False)).alias("is_position_suspect"),
     )
 )
 
 # COMMAND ----------
 
 # MAGIC %md ## Step 4 — Write comparison table (overwrite per service_date)
+# MAGIC
+# MAGIC > **First-run note:** If the table already exists with the old schema (missing
+# MAGIC > `gps_stop_distance_m` / `is_position_suspect`), drop it once:
+# MAGIC > `DROP TABLE IF EXISTS gold_rail_ground_truth_comparison`
 
 # COMMAND ----------
 
@@ -171,7 +237,9 @@ spark.sql(f"""
         scheduled_arrival_ts        TIMESTAMP,
         timing_error_seconds        INT,
         dwell_error_seconds         INT,
-        timing_abs_error_seconds    INT
+        timing_abs_error_seconds    INT,
+        gps_stop_distance_m         DOUBLE,
+        is_position_suspect         BOOLEAN
     )
     USING DELTA
     PARTITIONED BY (service_date)
@@ -196,26 +264,36 @@ print(f"Wrote {comparison.count()} rows to {COMPARISON_TABLE}")
 
 # COMMAND ----------
 
+_timing_cols = """
+        COUNT(*)                                         AS stops_matched,
+        SUM(CASE WHEN is_position_suspect THEN 1 ELSE 0 END) AS suspect_stops,
+        COUNT(timing_error_seconds)                      AS stops_with_timing,
+        ROUND(AVG(timing_error_seconds), 1)              AS mean_error_s,
+        ROUND(PERCENTILE(timing_error_seconds, 0.5), 1)  AS p50_error_s,
+        ROUND(PERCENTILE(timing_error_seconds, 0.9), 1)  AS p90_error_s,
+        MIN(timing_error_seconds)                        AS min_error_s,
+        MAX(timing_error_seconds)                        AS max_error_s,
+        ROUND(STDDEV(timing_error_seconds), 1)           AS stddev_s
+"""
+
 print("=" * 60)
-print("TIMING ERROR (actual_door_open - pipeline_arrival_ts)")
+print("TIMING ERROR — ALL ROWS (incl. suspect)")
 print("Positive = train arrived LATER than pipeline predicted")
 print("=" * 60)
-
 spark.sql(f"""
-    SELECT
-        service_date,
-        route_id,
-        direction_id,
-        gtfs_trip_id,
-        COUNT(*)                                    AS stops_matched,
-        COUNT(timing_error_seconds)                 AS stops_with_timing,
-        ROUND(AVG(timing_error_seconds), 1)         AS mean_error_s,
-        ROUND(PERCENTILE(timing_error_seconds, 0.5), 1) AS p50_error_s,
-        ROUND(PERCENTILE(timing_error_seconds, 0.9), 1) AS p90_error_s,
-        MIN(timing_error_seconds)                   AS min_error_s,
-        MAX(timing_error_seconds)                   AS max_error_s,
-        ROUND(STDDEV(timing_error_seconds), 1)      AS stddev_s
+    SELECT service_date, route_id, direction_id, gtfs_trip_id, {_timing_cols}
     FROM {COMPARISON_TABLE}
+    GROUP BY 1, 2, 3, 4
+    ORDER BY 1, 2, 3
+""").show(truncate=False)
+
+print("=" * 60)
+print(f"TIMING ERROR — CLEAN ONLY (gps_stop_distance_m <= {SUSPECT_GPS_DISTANCE_M}m)")
+print("=" * 60)
+spark.sql(f"""
+    SELECT service_date, route_id, direction_id, gtfs_trip_id, {_timing_cols}
+    FROM {COMPARISON_TABLE}
+    WHERE NOT is_position_suspect
     GROUP BY 1, 2, 3, 4
     ORDER BY 1, 2, 3
 """).show(truncate=False)
@@ -235,6 +313,8 @@ display(
             gtfs_trip_id,
             stop_sequence,
             stop_id,
+            is_position_suspect,
+            ROUND(gps_stop_distance_m, 0) AS gps_stop_distance_m,
             actual_door_open_ts,
             pipeline_actual_arrival_ts,
             timing_error_seconds,
