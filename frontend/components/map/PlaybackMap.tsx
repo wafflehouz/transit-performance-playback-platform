@@ -244,11 +244,14 @@ export default function PlaybackMap({ tracks, congestionHexes, showTraffic }: Pr
     }
   }, [mapReady, tracks])
 
-  // ── Fit bounds when any path first loads ─────────────────────────────────
-  // Fires when the identity of any track's points array changes
-  const allPoints = tracks.flatMap((t) => t.points)
+  // ── Fit bounds when path data loads or changes ───────────────────────────
+  // Keyed on point counts per slot (stable string) — avoids re-fitting on
+  // every 60fps render caused by the tracks prop being recreated each frame.
+  const pointCountKey = tracks.map((t) => t.points.length).join(',')
   useEffect(() => {
-    if (!mapReady || !mapRef.current || allPoints.length === 0) return
+    if (!mapReady || !mapRef.current) return
+    const allPoints = tracks.flatMap((t) => t.points)
+    if (allPoints.length === 0) return
     import('maplibre-gl').then((ml) => {
       const lngs = allPoints.map((p) => p.lon)
       const lats  = allPoints.map((p) => p.lat)
@@ -258,7 +261,7 @@ export default function PlaybackMap({ tracks, congestionHexes, showTraffic }: Pr
       )
       mapRef.current?.fitBounds(bounds, { padding: 72, duration: 800 })
     })
-  }, [mapReady, allPoints]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mapReady, pointCountKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Path split + vehicle positions ────────────────────────────────────────
   useEffect(() => {
