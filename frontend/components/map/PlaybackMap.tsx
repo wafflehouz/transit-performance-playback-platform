@@ -28,29 +28,34 @@ export interface PlaybackStop {
   pickup_type: number
 }
 
-interface Props {
+export interface TrackData {
   points: PlaybackPoint[]
-  currentIdx: number          // index into points; -1 = before start
+  currentIdx: number   // index into points; -1 = before start
   stops: PlaybackStop[]
-  routeColor: string | null
-  congestionHexes: CongestionHex[]  // hexes for current 15-min time bucket
+  color: string
+}
+
+interface Props {
+  tracks: TrackData[]          // up to 3
+  congestionHexes: CongestionHex[]
   showTraffic: boolean
 }
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY!
-const DEFAULT_COLOR = '#38bdf8'
+const MAX_TRACKS = 3
+const EMPTY_FC = { type: 'FeatureCollection' as const, features: [] }
 
 function stopOtpColor(delay: number | null, pickupType: number): string {
   if (delay === null) return '#6b7280'
-  if (delay < -60 && pickupType === 0) return '#ec4899'  // early
-  if (delay <= 360) return '#22c55e'                     // on-time (incl. early drop-off-only)
-  if (delay <= 600) return '#f59e0b'                     // late
-  return '#ef4444'                                       // very late
+  if (delay < -60 && pickupType === 0) return '#ec4899'
+  if (delay <= 360) return '#22c55e'
+  if (delay <= 600) return '#f59e0b'
+  return '#ef4444'
 }
 
 type GeoSource = { setData: (d: unknown) => void } | undefined
 
-export default function PlaybackMap({ points, currentIdx, stops, routeColor, congestionHexes, showTraffic }: Props) {
+export default function PlaybackMap({ tracks, congestionHexes, showTraffic }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef       = useRef<MaplibreMap | null>(null)
   const [mapReady, setMapReady] = useState(false)
@@ -73,9 +78,15 @@ export default function PlaybackMap({ points, currentIdx, stops, routeColor, con
       map.addControl(new ml.AttributionControl({ compact: true }), 'bottom-left')
 
       map.on('load', () => {
-        // Sources
-        for (const id of ['traffic', 'path-past', 'path-future', 'stops', 'vehicle'] as const) {
-          map.addSource(id, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+        // Shared sources (traffic, stops, vehicle)
+        for (const id of ['traffic', 'stops', 'vehicle'] as const) {
+          map.addSource(id, { type: 'geojson', data: EMPTY_FC })
+        }
+
+        // Per-slot path sources — always register all 3 slots
+        for (let n = 0; n < MAX_TRACKS; n++) {
+          map.addSource(`path-past-${n}`,   { type: 'geojson', data: EMPTY_FC })
+          map.addSource(`path-future-${n}`, { type: 'geojson', data: EMPTY_FC })
         }
 
         // Traffic hex fill (rendered first — everything else sits on top)
@@ -83,58 +94,51 @@ export default function PlaybackMap({ points, currentIdx, stops, routeColor, con
           id: 'traffic-fill',
           type: 'fill',
           source: 'traffic',
-          paint: {
-            'fill-color': ['get', 'color'],
-            'fill-opacity': 0.35,
-          },
+          paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.35 },
         })
         map.addLayer({
           id: 'traffic-border',
           type: 'line',
           source: 'traffic',
-          paint: {
-            'line-color': ['get', 'color'],
-            'line-width': 0.8,
-            'line-opacity': 0.6,
-          },
+          paint: { 'line-color': ['get', 'color'], 'line-width': 0.8, 'line-opacity': 0.6 },
         })
 
-        // Future path — dim dashed (hidden when traffic overlay active)
-        map.addLayer({
-          id: 'path-future-line',
-          type: 'line',
-          source: 'path-future',
-          paint: {
-            'line-color': '#475569',
-            'line-width': ['interpolate', ['linear'], ['zoom'], 9, 2, 13, 3],
-            'line-dasharray': [3, 2],
-            'line-opacity': 0.45,
-          },
-        })
+        // Per-slot path layers
+        for (let n = 0; n < MAX_TRACKS; n++) {
+          map.addLayer({
+            id: `path-future-line-${n}`,
+            type: 'line',
+            source: `path-future-${n}`,
+            paint: {
+              'line-color': '#475569',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 9, 2, 13, 3],
+              'line-dasharray': [3, 2],
+              'line-opacity': 0.45,
+            },
+          })
+          map.addLayer({
+            id: `path-past-casing-${n}`,
+            type: 'line',
+            source: `path-past-${n}`,
+            paint: {
+              'line-color': '#1e293b',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 9, 5, 13, 8],
+              'line-opacity': 0.8,
+            },
+          })
+          map.addLayer({
+            id: `path-past-line-${n}`,
+            type: 'line',
+            source: `path-past-${n}`,
+            paint: {
+              'line-color': '#38bdf8',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 9, 3, 13, 5],
+              'line-opacity': 0.9,
+            },
+          })
+        }
 
-        // Past path — casing + colored fill
-        map.addLayer({
-          id: 'path-past-casing',
-          type: 'line',
-          source: 'path-past',
-          paint: {
-            'line-color': '#1e293b',
-            'line-width': ['interpolate', ['linear'], ['zoom'], 9, 5, 13, 8],
-            'line-opacity': 0.8,
-          },
-        })
-        map.addLayer({
-          id: 'path-past-line',
-          type: 'line',
-          source: 'path-past',
-          paint: {
-            'line-color': DEFAULT_COLOR,
-            'line-width': ['interpolate', ['linear'], ['zoom'], 9, 3, 13, 5],
-            'line-opacity': 0.9,
-          },
-        })
-
-        // Stop circles (OTP colored stroke)
+        // Stop circles (OTP colored stroke, shared across all tracks)
         map.addLayer({
           id: 'stop-circles',
           type: 'circle',
@@ -146,8 +150,6 @@ export default function PlaybackMap({ points, currentIdx, stops, routeColor, con
             'circle-stroke-color': ['get', 'color'],
           },
         })
-
-        // Stop name labels at zoom 13+
         map.addLayer({
           id: 'stop-labels',
           type: 'symbol',
@@ -168,7 +170,7 @@ export default function PlaybackMap({ points, currentIdx, stops, routeColor, con
           },
         })
 
-        // Vehicle glow
+        // Vehicle layers — single source, multiple features with data-driven color
         map.addLayer({
           id: 'veh-glow',
           type: 'circle',
@@ -180,8 +182,6 @@ export default function PlaybackMap({ points, currentIdx, stops, routeColor, con
             'circle-blur': 1,
           },
         })
-
-        // Vehicle circle
         map.addLayer({
           id: 'veh-circle',
           type: 'circle',
@@ -193,7 +193,6 @@ export default function PlaybackMap({ points, currentIdx, stops, routeColor, con
           },
         })
 
-        // Bearing arrow (same canvas approach as LiveMap)
         const size = 64, cx = size / 2
         const canvas = document.createElement('canvas')
         canvas.width = size; canvas.height = size
@@ -236,96 +235,109 @@ export default function PlaybackMap({ points, currentIdx, stops, routeColor, con
     return () => { map?.remove() }
   }, [])
 
-  // ── Route color ────────────────────────────────────────────────────────────
+  // ── Route colors per slot ─────────────────────────────────────────────────
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
-    const color = routeColor ?? DEFAULT_COLOR
-    mapRef.current.setPaintProperty('path-past-line', 'line-color', color)
-  }, [mapReady, routeColor])
+    for (let n = 0; n < MAX_TRACKS; n++) {
+      const color = tracks[n]?.color ?? '#38bdf8'
+      mapRef.current.setPaintProperty(`path-past-line-${n}`, 'line-color', color)
+    }
+  }, [mapReady, tracks])
 
-  // ── Fit bounds when path first loads ──────────────────────────────────────
+  // ── Fit bounds when any path first loads ─────────────────────────────────
+  // Fires when the identity of any track's points array changes
+  const allPoints = tracks.flatMap((t) => t.points)
   useEffect(() => {
-    if (!mapReady || !mapRef.current || points.length === 0) return
+    if (!mapReady || !mapRef.current || allPoints.length === 0) return
     import('maplibre-gl').then((ml) => {
-      const lngs = points.map((p) => p.lon)
-      const lats  = points.map((p) => p.lat)
+      const lngs = allPoints.map((p) => p.lon)
+      const lats  = allPoints.map((p) => p.lat)
       const bounds = new ml.LngLatBounds(
         [Math.min(...lngs), Math.min(...lats)],
         [Math.max(...lngs), Math.max(...lats)],
       )
       mapRef.current?.fitBounds(bounds, { padding: 72, duration: 800 })
     })
-  }, [mapReady, points])  // intentionally only fires when points identity changes
+  }, [mapReady, allPoints]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Path split + vehicle position ─────────────────────────────────────────
+  // ── Path split + vehicle positions ────────────────────────────────────────
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const map = mapRef.current
 
-    if (points.length === 0) {
-      for (const id of ['path-past', 'path-future', 'vehicle']) {
-        ;(map.getSource(id) as GeoSource)?.setData({ type: 'FeatureCollection', features: [] })
+    const vehicleFeatures: unknown[] = []
+
+    for (let n = 0; n < MAX_TRACKS; n++) {
+      const track = tracks[n]
+
+      if (!track || track.points.length === 0) {
+        ;(map.getSource(`path-past-${n}`)   as GeoSource)?.setData(EMPTY_FC)
+        ;(map.getSource(`path-future-${n}`) as GeoSource)?.setData(EMPTY_FC)
+        continue
       }
-      return
-    }
 
-    const idx = currentIdx < 0 ? 0 : currentIdx
-    const pastCoords   = points.slice(0, idx + 1).map((p) => [p.lon, p.lat])
-    const futureCoords = points.slice(idx).map((p) => [p.lon, p.lat])
+      const { points, currentIdx, color } = track
+      const idx         = currentIdx < 0 ? 0 : currentIdx
+      const pastCoords   = points.slice(0, idx + 1).map((p) => [p.lon, p.lat])
+      const futureCoords = points.slice(idx).map((p) => [p.lon, p.lat])
 
-    ;(map.getSource('path-past') as GeoSource)?.setData({
-      type: 'FeatureCollection',
-      features: pastCoords.length >= 2
-        ? [{ type: 'Feature', geometry: { type: 'LineString', coordinates: pastCoords }, properties: {} }]
-        : [],
-    })
-    ;(map.getSource('path-future') as GeoSource)?.setData({
-      type: 'FeatureCollection',
-      features: futureCoords.length >= 2
-        ? [{ type: 'Feature', geometry: { type: 'LineString', coordinates: futureCoords }, properties: {} }]
-        : [],
-    })
-
-    if (currentIdx >= 0 && currentIdx < points.length) {
-      const pt = points[currentIdx]
-      const color = routeColor ?? DEFAULT_COLOR
-      ;(map.getSource('vehicle') as GeoSource)?.setData({
+      ;(map.getSource(`path-past-${n}`) as GeoSource)?.setData({
         type: 'FeatureCollection',
-        features: [{
+        features: pastCoords.length >= 2
+          ? [{ type: 'Feature', geometry: { type: 'LineString', coordinates: pastCoords }, properties: {} }]
+          : [],
+      })
+      ;(map.getSource(`path-future-${n}`) as GeoSource)?.setData({
+        type: 'FeatureCollection',
+        features: futureCoords.length >= 2
+          ? [{ type: 'Feature', geometry: { type: 'LineString', coordinates: futureCoords }, properties: {} }]
+          : [],
+      })
+
+      if (currentIdx >= 0 && currentIdx < points.length) {
+        const pt = points[currentIdx]
+        vehicleFeatures.push({
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [pt.lon, pt.lat] },
           properties: { bearing: pt.bearing, color },
-        }],
-      })
-    } else {
-      ;(map.getSource('vehicle') as GeoSource)?.setData({ type: 'FeatureCollection', features: [] })
+        })
+      }
     }
-  }, [mapReady, points, currentIdx, routeColor])
 
-  // ── Stop markers ──────────────────────────────────────────────────────────
+    ;(map.getSource('vehicle') as GeoSource)?.setData({
+      type: 'FeatureCollection',
+      features: vehicleFeatures,
+    })
+  }, [mapReady, tracks])
+
+  // ── Stop markers — flatten all tracks ────────────────────────────────────
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
-    const features = stops
-      .filter((s) => s.lat != null && s.lon != null)
-      .map((s) => ({
-        type: 'Feature' as const,
-        geometry: { type: 'Point' as const, coordinates: [s.lon!, s.lat!] },
-        properties: {
-          stop_id: s.stop_id,
-          stop_name: s.stop_name,
-          color: stopOtpColor(s.arrival_delay_seconds, s.pickup_type),
-        },
-      }))
+    const features = tracks.flatMap(({ stops, color }) =>
+      stops
+        .filter((s) => s.lat != null && s.lon != null)
+        .map((s) => ({
+          type: 'Feature' as const,
+          geometry: { type: 'Point' as const, coordinates: [s.lon!, s.lat!] },
+          properties: {
+            stop_id:   s.stop_id,
+            stop_name: s.stop_name,
+            color:     stopOtpColor(s.arrival_delay_seconds, s.pickup_type),
+          },
+        }))
+    )
     ;(mapRef.current.getSource('stops') as GeoSource)?.setData({ type: 'FeatureCollection', features })
-  }, [mapReady, stops])
+  }, [mapReady, tracks])
 
   // ── Traffic visibility toggle ──────────────────────────────────────────────
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const vis = (v: boolean) => v ? 'visible' : 'none'
-    mapRef.current.setLayoutProperty('traffic-fill',     'visibility', vis(showTraffic))
-    mapRef.current.setLayoutProperty('traffic-border',   'visibility', vis(showTraffic))
-    mapRef.current.setLayoutProperty('path-future-line', 'visibility', vis(!showTraffic))
+    mapRef.current.setLayoutProperty('traffic-fill',   'visibility', vis(showTraffic))
+    mapRef.current.setLayoutProperty('traffic-border', 'visibility', vis(showTraffic))
+    for (let n = 0; n < MAX_TRACKS; n++) {
+      mapRef.current.setLayoutProperty(`path-future-line-${n}`, 'visibility', vis(!showTraffic))
+    }
   }, [mapReady, showTraffic])
 
   // ── Congestion hex polygons ────────────────────────────────────────────────
@@ -333,22 +345,18 @@ export default function PlaybackMap({ points, currentIdx, stops, routeColor, con
     if (!mapReady || !mapRef.current) return
 
     if (congestionHexes.length === 0) {
-      ;(mapRef.current.getSource('traffic') as GeoSource)?.setData({ type: 'FeatureCollection', features: [] })
+      ;(mapRef.current.getSource('traffic') as GeoSource)?.setData(EMPTY_FC)
       return
     }
 
-    // Lazy-load h3-js (pure JS, client-only) to convert indices → GeoJSON polygons.
-    // cellToBoundary returns [[lat, lon], ...]; GeoJSON needs [lon, lat].
     import('h3-js').then(({ cellToBoundary }) => {
       if (!mapRef.current) return
-      // h3_index is stored in Databricks as a decimal string (e.g., "617726976648282111").
-      // h3-js expects a hex string (e.g., "8929b6d02c7ffff"). Convert before calling cellToBoundary.
       const features = congestionHexes.flatMap((hex) => {
         try {
           const hexIndex = BigInt(hex.h3_index).toString(16)
-          const boundary = cellToBoundary(hexIndex) // [[lat, lon], ...]
+          const boundary = cellToBoundary(hexIndex)
           const ring = boundary.map(([lat, lon]) => [lon, lat])
-          ring.push(ring[0]) // close the polygon ring
+          ring.push(ring[0])
           return [{
             type: 'Feature' as const,
             geometry: { type: 'Polygon' as const, coordinates: [ring] },

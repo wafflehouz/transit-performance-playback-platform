@@ -4,11 +4,9 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useFilterPanel } from '@/lib/filter-panel-context'
 import { useNav } from '@/lib/nav-context'
-import RouteFilterPanel, {
-  type OtpFilterState,
-  type DatePreset,
-} from '@/components/filters/RouteFilterPanel'
 import PlaybackMap, { type PlaybackPoint, type PlaybackStop } from '@/components/map/PlaybackMap'
+import PlaybackFilterPanel from '@/components/filters/PlaybackFilterPanel'
+import type { TripListRow } from '@/components/filters/PlaybackFilterPanel'
 import { playbackTripListSql, playbackPathSql, playbackStopsSql, playbackVehiclesSql, trafficCongestionSql } from '@/lib/queries/playback'
 import { ROUTES_WITH_DATA_SQL } from '@/lib/queries/otp'
 import type { DimRoute, CongestionHex } from '@/types'
@@ -22,14 +20,10 @@ function todayMinus1(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-// DuckDB serializes timestamps as "YYYY-MM-DD HH:MM:SS" (no timezone suffix).
-// JavaScript treats timezone-naive datetime strings as LOCAL time, which
-// corrupts the ms value passed to fmtPhoenix. Appending 'Z' forces UTC parsing.
 function dbToMs(ts: string): number {
   return new Date(ts.replace(' ', 'T') + 'Z').getTime()
 }
 
-// UTC timestamp (ms) → Phoenix local HH:MM:SS (UTC-7, no DST)
 function fmtPhoenix(ms: number, withSeconds = true): string {
   const d = new Date(ms - 7 * 3600 * 1000)
   const h = d.getUTCHours()
@@ -63,13 +57,61 @@ function delayColor(s: number | null, pickupType: number): string {
   return 'text-red-400'
 }
 
-// VM route color (matches OTP page)
-const VM_NAME_COLORS: Record<string, string> = {
-  'A': '#38BDF8', 'B': '#F59E0B', 'S': '#84CC16', 'SKYT': '#94A3B8',
+function fmtDuration(ms: number): string {
+  const s = Math.floor(ms / 1000)
+  const m = Math.floor(s / 60)
+  const h = Math.floor(m / 60)
+  return h > 0
+    ? `${h}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+    : `${m}:${String(s % 60).padStart(2, '0')}`
 }
-function routeColor(route: DimRoute | undefined): string | null {
-  if (!route) return null
-  return VM_NAME_COLORS[route.route_short_name.toUpperCase().trim()] ?? '#A855F7'
+
+function binarySearch(points: PlaybackPoint[], ms: number): number {
+  if (points.length === 0) return -1
+  if (ms < points[0].tsMs) return -1
+  let lo = 0, hi = points.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (points[mid].tsMs <= ms) lo = mid
+    else hi = mid - 1
+  }
+  return lo
+}
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+interface StopRow extends PlaybackStop {
+  stop_sequence: number
+  scheduled_arrival_ts: string | null
+  actual_arrival_ts: string | null
+  actual_arrival_ts_ms: number | null
+  dwell_seconds: number | null
+}
+
+// User selections per track slot
+interface TrackConfig {
+  routeId: string | null
+  selectedTripId: string | null
+}
+
+// Loaded/derived data per track slot
+interface TrackDataState {
+  tripList: TripListRow[]
+  pathPoints: PlaybackPoint[]
+  stopRows: StopRow[]
+  vehicles: { vehicle_id: string; ping_count: number }[]
+  loadingTrips: boolean
+  loadingTrip: boolean
+}
+
+const MAX_TRACKS = 3
+const SLOT_COLORS = ['#38BDF8', '#F59E0B', '#84CC16']
+
+const SPEEDS = [8, 16, 32, 64] as const
+type Speed = typeof SPEEDS[number]
+
+function emptyData(): TrackDataState {
+  return { tripList: [], pathPoints: [], stopRows: [], vehicles: [], loadingTrips: false, loadingTrip: false }
 }
 
 async function fetchJson(sql: string, params: Record<string, string> = {}): Promise<any[]> {
@@ -83,30 +125,6 @@ async function fetchJson(sql: string, params: Record<string, string> = {}): Prom
   return data.rows ?? []
 }
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-
-interface TripListRow {
-  trip_id: string
-  direction_id: number | null
-  trip_headsign: string | null
-  first_ts: string
-  last_ts: string
-  point_count: number
-  first_stop_scheduled_ts: string | null
-  first_timepoint_scheduled_ts: string | null
-}
-
-interface StopRow extends PlaybackStop {
-  stop_sequence: number
-  scheduled_arrival_ts: string | null
-  actual_arrival_ts: string | null
-  actual_arrival_ts_ms: number | null  // pre-parsed for scrubber sync
-  dwell_seconds: number | null
-}
-
-const SPEEDS = [8, 16, 32, 64] as const
-type Speed = typeof SPEEDS[number]
-
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function PlaybackPageClient() {
@@ -116,45 +134,30 @@ export default function PlaybackPageClient() {
 
   const { setNavFilter } = useNav()
 
-  // Deep-link params from anomaly drawer (routeId, serviceDate, directionId, timeBucket)
-  const searchParams = useSearchParams()
-  const initRouteId    = searchParams.get('routeId')
-  const initDate       = searchParams.get('serviceDate')
-  const initDirectionId = searchParams.get('directionId')
-  const timeBucketParam = useRef(searchParams.get('timeBucket'))  // read once; drives auto-selection
+  const searchParams    = useSearchParams()
+  const initRouteId     = searchParams.get('routeId')
+  const initDate        = searchParams.get('serviceDate')
+  const timeBucketParam = useRef(searchParams.get('timeBucket'))
 
   const [serviceDate, setServiceDate] = useState(() => initDate ?? todayMinus1())
-  const [filters, setFilters] = useState<OtpFilterState>(() => ({
-    mode: 'single',
-    routeId: initRouteId,
-    groupName: null,
-    startDate: initDate ?? todayMinus1(),
-    endDate:   initDate ?? todayMinus1(),
-    direction: initDirectionId != null ? (Number(initDirectionId) as 0 | 1) : 'both',
-    timepointOnly: searchParams.get('timepointOnly') === 'true',
-  }))
-  const [preset, setPreset] = useState<DatePreset>('1d')
 
-  const [routes, setRoutes] = useState<DimRoute[]>([])
+  // Track configurations (user selections) — separate from loaded data
+  const [configs, setConfigs] = useState<TrackConfig[]>([
+    { routeId: initRouteId, selectedTripId: null },
+  ])
+  const [trackStates, setTrackStates] = useState<TrackDataState[]>([emptyData()])
+
+  const [routes,        setRoutes]        = useState<DimRoute[]>([])
   const [routesLoading, setRoutesLoading] = useState(true)
-  const [tripList, setTripList] = useState<TripListRow[]>([])
-  const [selectedTripId, setSelectedTripId] = useState<string | null>(null)
-  const [pathPoints, setPathPoints] = useState<PlaybackPoint[]>([])
-  const [stopRows, setStopRows] = useState<StopRow[]>([])
-
-  const [vehicles,           setVehicles]           = useState<{ vehicle_id: string; ping_count: number }[]>([])
-  const [loadingTrips,       setLoadingTrips]       = useState(false)
-  const [loadingTrip,        setLoadingTrip]        = useState(false)
-  const [error,              setError]              = useState<string | null>(null)
+  const [error,         setError]         = useState<string | null>(null)
   const [congestionByBucket, setCongestionByBucket] = useState<Map<number, CongestionHex[]>>(new Map())
-  const [showTraffic,        setShowTraffic]        = useState(true)
+  const [showTraffic, setShowTraffic] = useState(true)
 
   // Playback state
-  const [isPlaying,   setIsPlaying]   = useState(false)
-  const [playbackMs,  setPlaybackMs]  = useState(0)
-  const [speed,       setSpeed]       = useState<Speed>(8)
+  const [isPlaying,  setIsPlaying]  = useState(false)
+  const [playbackMs, setPlaybackMs] = useState(0)
+  const [speed,      setSpeed]      = useState<Speed>(8)
 
-  // Refs for RAF loop (avoids stale closures)
   const isPlayingRef  = useRef(false)
   const playbackMsRef = useRef(0)
   const speedRef      = useRef<Speed>(8)
@@ -165,19 +168,55 @@ export default function PlaybackPageClient() {
   useEffect(() => { playbackMsRef.current = playbackMs }, [playbackMs])
   useEffect(() => { speedRef.current      = speed      }, [speed])
 
-  // Sync route/stop-type selection → nav context so returning to OTP/Dwell
-  // reflects any route change made inside Playback
+  // Derived flags
+  const hasAnyData = trackStates.some((s) => s.pathPoints.length > 0)
+  const multiRoute  = trackStates.filter((s) => s.pathPoints.length > 0).length > 1
+
+  const startMs = useMemo(() => {
+    const firsts = trackStates.filter((s) => s.pathPoints.length > 0).map((s) => s.pathPoints[0].tsMs)
+    return firsts.length > 0 ? Math.min(...firsts) : 0
+  }, [trackStates])
+
+  const endMs = useMemo(() => {
+    const lasts = trackStates.filter((s) => s.pathPoints.length > 0).map((s) => s.pathPoints.at(-1)!.tsMs)
+    return lasts.length > 0 ? Math.max(...lasts) : 0
+  }, [trackStates])
+
+  useEffect(() => { endMsRef.current = endMs }, [endMs])
+
+  // Per-track current point index (binary search on shared clock)
+  const currentIdxByTrack = useMemo(
+    () => trackStates.map((s) => binarySearch(s.pathPoints, playbackMs)),
+    [trackStates, playbackMs],
+  )
+
+  // Current stop index for single-route stop sidebar
+  const primaryStops = trackStates[0]?.stopRows ?? []
+  const currentStopIdx = useMemo(() => {
+    let last = -1
+    for (let i = 0; i < primaryStops.length; i++) {
+      const ms = primaryStops[i].actual_arrival_ts_ms
+      if (ms !== null && ms <= playbackMs) last = i
+    }
+    return last
+  }, [primaryStops, playbackMs])
+
+  // Current 15-min congestion bucket (keyed to primary route corridor)
+  const currentCongestionHexes = useMemo<CongestionHex[]>(() => {
+    if (congestionByBucket.size === 0) return []
+    const bucketMs = Math.floor(playbackMs / 900_000) * 900_000
+    return congestionByBucket.get(bucketMs) ?? []
+  }, [congestionByBucket, playbackMs])
+
+  // Nav context — reflect primary route
   useEffect(() => {
     setNavFilter({
-      scope:         filters.routeId ? 'single' : null,
+      scope:         configs[0]?.routeId ? 'single' : null,
       groupName:     null,
-      routeId:       filters.routeId,
-      timepointOnly: filters.timepointOnly,
+      routeId:       configs[0]?.routeId ?? null,
+      timepointOnly: false,
     })
-  }, [filters.routeId, filters.timepointOnly, setNavFilter])
-
-  const activeRouteId = filters.mode === 'single' ? filters.routeId : null
-  const selectedRoute = routes.find((r) => r.route_id === activeRouteId)
+  }, [configs, setNavFilter])
 
   // ── Load routes once ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -187,106 +226,132 @@ export default function PlaybackPageClient() {
       .finally(() => setRoutesLoading(false))
   }, [])
 
-  // ── Load trip list when route/date changes ─────────────────────────────────
+  // ── Load trip lists when route selections or date change ──────────────────
+  const routeIdsKey = configs.map((c) => c.routeId ?? '').join('|')
   useEffect(() => {
-    if (!activeRouteId) { setTripList([]); setSelectedTripId(null); return }
-    setLoadingTrips(true)
-    setTripList([])
-    setSelectedTripId(null)
-    fetchJson(playbackTripListSql(activeRouteId), { serviceDate })
-      .then((rows) => setTripList(rows))
-      .catch((e) => setError(e.message))
-      .finally(() => setLoadingTrips(false))
-  }, [activeRouteId, serviceDate])
-
-  // ── Auto-select trip from deep-link timeBucket param ──────────────────────
-  // Runs once when tripList first populates after a deep-link navigation.
-  useEffect(() => {
-    const tb = timeBucketParam.current
-    if (tripList.length === 0 || !tb || selectedTripId) return
-    const targetMs = dbToMs(tb)
-    let best = tripList[0]
-    let bestDiff = Infinity
-    for (const t of tripList) {
-      const firstMs = dbToMs(t.first_ts)
-      const lastMs  = dbToMs(t.last_ts)
-      // Exact: trip was active at this time
-      if (firstMs <= targetMs && targetMs <= lastMs) { best = t; break }
-      const diff = Math.min(Math.abs(firstMs - targetMs), Math.abs(lastMs - targetMs))
-      if (diff < bestDiff) { bestDiff = diff; best = t }
-    }
-    setSelectedTripId(best.trip_id)
-  }, [tripList]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Load path + stops when trip changes ───────────────────────────────────
-  useEffect(() => {
-    if (!selectedTripId) {
-      setPathPoints([])
-      setStopRows([])
-      setIsPlaying(false)
-      return
-    }
-
-    setLoadingTrip(true)
-    setPathPoints([])
-    setStopRows([])
-    setVehicles([])
+    let cancelled = false
+    setTrackStates(configs.map((c) => ({ ...emptyData(), loadingTrips: !!c.routeId })))
     setIsPlaying(false)
     setError(null)
 
-    const params = { serviceDate }
-    Promise.all([
-      fetchJson(playbackPathSql(selectedTripId), params),
-      fetchJson(playbackStopsSql(selectedTripId), params),
-      fetchJson(playbackVehiclesSql(selectedTripId), params),
-    ])
-      .then(([pathRows, sRows, vRows]) => {
-        setVehicles(vRows.map((r: any) => ({ vehicle_id: String(r.vehicle_id), ping_count: Number(r.ping_count) })))
-        const pts: PlaybackPoint[] = pathRows.map((r: any) => ({
-          tsMs: dbToMs(r.point_ts),
-          lat: Number(r.lat),
-          lon: Number(r.lon),
-          bearing: r.bearing != null ? Number(r.bearing) : null,
-          speed: r.speed_mps != null ? Number(r.speed_mps) : null,
-        }))
+    configs.forEach((c, i) => {
+      if (!c.routeId) return
+      fetchJson(playbackTripListSql(c.routeId), { serviceDate })
+        .then((rows) => {
+          if (cancelled) return
+          setTrackStates((prev) =>
+            prev.map((s, j) => j === i ? { ...s, tripList: rows, loadingTrips: false } : s),
+          )
+        })
+        .catch((e) => {
+          if (cancelled) return
+          setError(e.message)
+          setTrackStates((prev) =>
+            prev.map((s, j) => j === i ? { ...s, loadingTrips: false } : s),
+          )
+        })
+    })
 
-        const stops: StopRow[] = sRows.map((r: any) => ({
-          stop_id: r.stop_id,
-          stop_name: r.stop_name ?? null,
-          stop_sequence: Number(r.stop_sequence),
-          lat: r.lat != null ? Number(r.lat) : null,
-          lon: r.lon != null ? Number(r.lon) : null,
-          scheduled_arrival_ts: r.scheduled_arrival_ts ?? null,
-          actual_arrival_ts: r.actual_arrival_ts ?? null,
-          actual_arrival_ts_ms: r.actual_arrival_ts ? dbToMs(r.actual_arrival_ts) : null,
-          arrival_delay_seconds: r.arrival_delay_seconds != null ? Number(r.arrival_delay_seconds) : null,
-          pickup_type: Number(r.pickup_type ?? 0),
-          dwell_seconds: r.dwell_seconds != null ? Number(r.dwell_seconds) : null,
-        }))
+    return () => { cancelled = true }
+  }, [routeIdsKey, serviceDate]) // eslint-disable-line react-hooks/exhaustive-deps
 
-        setPathPoints(pts)
-        setStopRows(stops)
-
-        if (pts.length > 0) {
-          const startMs = pts[0].tsMs
-          endMsRef.current = pts[pts.length - 1].tsMs
-          playbackMsRef.current = startMs
-          setPlaybackMs(startMs)
-        }
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoadingTrip(false))
-  }, [selectedTripId, serviceDate])
-
-  // ── Load congestion after path points are ready ───────────────────────────
-  // Derives H3 indices from the VP path (client-side via h3-js), then queries
-  // gold_route_segment_congestion for those hexes + service date.
+  // ── Auto-select trip for primary track from deep-link timeBucket ──────────
   useEffect(() => {
-    if (pathPoints.length === 0) { setCongestionByBucket(new Map()); return }
+    const tb       = timeBucketParam.current
+    const tripList = trackStates[0]?.tripList ?? []
+    if (tripList.length === 0 || !tb || configs[0]?.selectedTripId) return
+    const targetMs = dbToMs(tb)
+    let best = tripList[0], bestDiff = Infinity
+    for (const t of tripList) {
+      const diff = Math.abs(dbToMs(t.first_ts) - targetMs)
+      if (diff < bestDiff) { bestDiff = diff; best = t }
+    }
+    setConfigs((prev) => prev.map((c, i) => i === 0 ? { ...c, selectedTripId: best.trip_id } : c))
+  }, [trackStates]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Load path + stops when trip selections change ─────────────────────────
+  const tripIdsKey = configs.map((c) => c.selectedTripId ?? '').join('|')
+  useEffect(() => {
+    let cancelled = false
+    setTrackStates((prev) =>
+      prev.map((s, i) => ({
+        ...s,
+        pathPoints: [],
+        stopRows:   [],
+        vehicles:   [],
+        loadingTrip: !!configs[i]?.selectedTripId,
+      })),
+    )
+    setIsPlaying(false)
+    setError(null)
+
+    configs.forEach((c, i) => {
+      if (!c.selectedTripId) return
+      const params = { serviceDate }
+      Promise.all([
+        fetchJson(playbackPathSql(c.selectedTripId), params),
+        fetchJson(playbackStopsSql(c.selectedTripId), params),
+        fetchJson(playbackVehiclesSql(c.selectedTripId), params),
+      ])
+        .then(([pathRows, sRows, vRows]) => {
+          if (cancelled) return
+          const pts: PlaybackPoint[] = pathRows.map((r: any) => ({
+            tsMs:    dbToMs(r.point_ts),
+            lat:     Number(r.lat),
+            lon:     Number(r.lon),
+            bearing: r.bearing   != null ? Number(r.bearing)   : null,
+            speed:   r.speed_mps != null ? Number(r.speed_mps) : null,
+          }))
+          const stops: StopRow[] = sRows.map((r: any) => ({
+            stop_id:               r.stop_id,
+            stop_name:             r.stop_name ?? null,
+            stop_sequence:         Number(r.stop_sequence),
+            lat:                   r.lat != null ? Number(r.lat) : null,
+            lon:                   r.lon != null ? Number(r.lon) : null,
+            scheduled_arrival_ts:  r.scheduled_arrival_ts ?? null,
+            actual_arrival_ts:     r.actual_arrival_ts    ?? null,
+            actual_arrival_ts_ms:  r.actual_arrival_ts ? dbToMs(r.actual_arrival_ts) : null,
+            arrival_delay_seconds: r.arrival_delay_seconds != null ? Number(r.arrival_delay_seconds) : null,
+            pickup_type:           Number(r.pickup_type ?? 0),
+            dwell_seconds:         r.dwell_seconds != null ? Number(r.dwell_seconds) : null,
+          }))
+          const vehicles = vRows.map((r: any) => ({
+            vehicle_id: String(r.vehicle_id),
+            ping_count: Number(r.ping_count),
+          }))
+
+          setTrackStates((prev) =>
+            prev.map((s, j) => j === i
+              ? { ...s, pathPoints: pts, stopRows: stops, vehicles, loadingTrip: false }
+              : s),
+          )
+
+          // Position scrubber at start of first loaded trip
+          if (pts.length > 0 && i === 0) {
+            const ms = pts[0].tsMs
+            playbackMsRef.current = ms
+            setPlaybackMs(ms)
+          }
+        })
+        .catch((e) => {
+          if (cancelled) return
+          setError(e.message)
+          setTrackStates((prev) =>
+            prev.map((s, j) => j === i ? { ...s, loadingTrip: false } : s),
+          )
+        })
+    })
+
+    return () => { cancelled = true }
+  }, [tripIdsKey, serviceDate]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Load congestion for primary route corridor ────────────────────────────
+  const primaryPathPoints = trackStates[0]?.pathPoints ?? []
+  useEffect(() => {
+    if (primaryPathPoints.length === 0) { setCongestionByBucket(new Map()); return }
     import('h3-js').then(({ latLngToCell }) => {
-      const h3Set = new Set(pathPoints.map((p) => latLngToCell(p.lat, p.lon, 9)))
-      const h3Indices = [...h3Set]
-      const sql = trafficCongestionSql(h3Indices)
+      const h3Set = new Set(primaryPathPoints.map((p) => latLngToCell(p.lat, p.lon, 9)))
+      const sql   = trafficCongestionSql([...h3Set])
       if (!sql) return
       fetchJson(sql, { serviceDate })
         .then((rows) => {
@@ -306,11 +371,11 @@ export default function PlaybackPageClient() {
         })
         .catch(() => {})
     })
-  }, [pathPoints, serviceDate])
+  }, [primaryPathPoints, serviceDate]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Playback RAF loop ──────────────────────────────────────────────────────
   useEffect(() => {
-    if (!isPlaying || pathPoints.length === 0) {
+    if (!isPlaying || !hasAnyData) {
       if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
       return
     }
@@ -320,7 +385,7 @@ export default function PlaybackPageClient() {
     function frame(t: DOMHighResTimeStamp) {
       if (!isPlayingRef.current) return
       if (lastT !== null) {
-        const dt  = t - lastT
+        const dt   = t - lastT
         const next = playbackMsRef.current + dt * speedRef.current
         const end  = endMsRef.current
         if (next >= end) {
@@ -341,37 +406,7 @@ export default function PlaybackPageClient() {
     return () => {
       if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
     }
-  }, [isPlaying, pathPoints])
-
-  // ── Current point index (binary search) ───────────────────────────────────
-  const currentIdx = useMemo(() => {
-    if (pathPoints.length === 0) return -1
-    if (playbackMs < pathPoints[0].tsMs) return -1
-    let lo = 0, hi = pathPoints.length - 1
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1
-      if (pathPoints[mid].tsMs <= playbackMs) lo = mid
-      else hi = mid - 1
-    }
-    return lo
-  }, [pathPoints, playbackMs])
-
-  // Current stop (last stop with actual arrival before or at playbackMs)
-  const currentStopIdx = useMemo(() => {
-    let last = -1
-    for (let i = 0; i < stopRows.length; i++) {
-      const ms = stopRows[i].actual_arrival_ts_ms
-      if (ms !== null && ms <= playbackMs) last = i
-    }
-    return last
-  }, [stopRows, playbackMs])
-
-  // Current 15-min congestion bucket (O(1) Map lookup, runs at 60fps during playback)
-  const currentCongestionHexes = useMemo<CongestionHex[]>(() => {
-    if (congestionByBucket.size === 0) return []
-    const bucketMs = Math.floor(playbackMs / 900_000) * 900_000
-    return congestionByBucket.get(bucketMs) ?? []
-  }, [congestionByBucket, playbackMs])
+  }, [isPlaying, hasAnyData])
 
   // Scroll current stop into view
   const stopRefs = useRef<(HTMLDivElement | null)[]>([])
@@ -381,45 +416,30 @@ export default function PlaybackPageClient() {
     }
   }, [currentStopIdx])
 
-  // ── Filter panel sidebar content ───────────────────────────────────────────
-  // Deps: every value rendered into the panel JSX — avoids re-running on 60fps RAF renders
-  useEffect(() => {
-    setContentRef.current(
-      <RouteFilterPanel
-        filters={filters}
-        onChange={(f) => setFilters({ ...f, mode: 'single', groupName: null })}
-        routes={routes}
-        groups={[]}
-        showDirection={false}
-        activePreset={preset}
-        onPresetChange={setPreset}
-        routesLoading={routesLoading}
-        scheduleDate={serviceDate}
-        onScheduleDateChange={(d) => setServiceDate(d)}
-      />
-    )
-  }, [filters, routes, preset, serviceDate, routesLoading]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Trip selector helpers ──────────────────────────────────────────────────
-  function dirLabel(id: number | null): string {
-    if (id === 0) return 'Outbound'
-    if (id === 1) return 'Inbound'
-    return ''
+  // ── Track management handlers ──────────────────────────────────────────────
+  function handleAddTrack() {
+    if (configs.length >= MAX_TRACKS) return
+    setConfigs((prev) => [...prev, { routeId: null, selectedTripId: null }])
+    setTrackStates((prev) => [...prev, emptyData()])
   }
 
-  function tripLabel(t: TripListRow): string {
-    const ts   = t.first_timepoint_scheduled_ts ?? t.first_stop_scheduled_ts ?? t.first_ts
-    const time = fmtPhoenix(dbToMs(ts), false)
-    const head = t.trip_headsign ? `To ${t.trip_headsign}` : ''
-    return [time, head].filter(Boolean).join(' · ')
+  function handleRemoveTrack(idx: number) {
+    setConfigs((prev) => prev.filter((_, i) => i !== idx))
+    setTrackStates((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  function handleRouteChange(idx: number, routeId: string | null) {
+    setConfigs((prev) => prev.map((c, i) => i === idx ? { routeId, selectedTripId: null } : c))
+  }
+
+  function handleTripChange(idx: number, tripId: string | null) {
+    setConfigs((prev) => prev.map((c, i) => i === idx ? { ...c, selectedTripId: tripId } : c))
   }
 
   // ── Play/pause ─────────────────────────────────────────────────────────────
   function togglePlay() {
-    if (pathPoints.length === 0) return
-    // If at end, restart from beginning
+    if (!hasAnyData) return
     if (!isPlaying && playbackMs >= endMsRef.current) {
-      const startMs = pathPoints[0].tsMs
       playbackMsRef.current = startMs
       setPlaybackMs(startMs)
     }
@@ -432,22 +452,44 @@ export default function PlaybackPageClient() {
     setPlaybackMs(val)
   }
 
-  // ── Computed display values ────────────────────────────────────────────────
-  const startMs   = pathPoints.length > 0 ? pathPoints[0].tsMs : 0
-  const endMs     = pathPoints.length > 0 ? pathPoints[pathPoints.length - 1].tsMs : 0
-  const currentTs = pathPoints.length > 0 ? fmtPhoenix(playbackMs) : '—'
-  const elapsedMs = playbackMs - startMs
-  const totalMs   = endMs - startMs
-  function fmtDuration(ms: number): string {
-    const s = Math.floor(ms / 1000)
-    const m = Math.floor(s / 60)
-    const h = Math.floor(m / 60)
-    return h > 0
-      ? `${h}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
-      : `${m}:${String(s % 60).padStart(2, '0')}`
-  }
+  // ── Filter panel injection ─────────────────────────────────────────────────
+  useEffect(() => {
+    setContentRef.current(
+      <PlaybackFilterPanel
+        tracks={configs.map((c, i) => ({
+          routeId:        c.routeId,
+          selectedTripId: c.selectedTripId,
+          tripList:       trackStates[i]?.tripList    ?? [],
+          loadingTrips:   trackStates[i]?.loadingTrips ?? false,
+          color:          SLOT_COLORS[i],
+        }))}
+        routes={routes}
+        routesLoading={routesLoading}
+        serviceDate={serviceDate}
+        onServiceDateChange={setServiceDate}
+        onRouteChange={handleRouteChange}
+        onTripChange={handleTripChange}
+        onAddTrack={handleAddTrack}
+        onRemoveTrack={handleRemoveTrack}
+      />,
+    )
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configs, trackStates, routes, routesLoading, serviceDate])
 
-  const selectedTrip = tripList.find((t) => t.trip_id === selectedTripId)
+  // ── Computed display values ────────────────────────────────────────────────
+  const headerTitle = configs
+    .filter((c) => c.routeId)
+    .map((c) => routes.find((r) => r.route_id === c.routeId)?.route_short_name)
+    .filter(Boolean)
+    .join(' + ')
+
+  const isLoading       = trackStates.some((s) => s.loadingTrip)
+  const noRoutes        = configs.every((c) => !c.routeId)
+  const noTrips         = configs.every((c) => !c.selectedTripId)
+  const currentTs       = hasAnyData ? fmtPhoenix(playbackMs) : '—'
+  const elapsedMs       = playbackMs - startMs
+  const totalMs         = endMs - startMs
+  const primaryVehicles = trackStates[0]?.vehicles ?? []
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -458,43 +500,12 @@ export default function PlaybackPageClient() {
         <div>
           <h1 className="text-xl font-semibold text-white">Trip Playback</h1>
           <p className="text-sm text-gray-400 mt-0.5">
-            {selectedRoute
-              ? `Route ${selectedRoute.route_short_name} · ${serviceDate}`
-              : 'Select a route and date to begin'}
+            {headerTitle
+              ? `Route${headerTitle.includes('+') ? 's' : ''} ${headerTitle} · ${serviceDate}`
+              : 'Select a route in the filter panel to begin'}
           </p>
         </div>
-
-        {/* Trip selector */}
-        {activeRouteId && (
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-gray-500 shrink-0">Trip</span>
-            {loadingTrips ? (
-              <div className="h-8 w-64 bg-gray-800 rounded animate-pulse" />
-            ) : tripList.length === 0 ? (
-              <span className="text-sm text-gray-500">No trips found for this route / date</span>
-            ) : (
-              <select
-                value={selectedTripId ?? ''}
-                onChange={(e) => setSelectedTripId(e.target.value || null)}
-                className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-violet-500 min-w-72"
-              >
-                <option value="">Select a trip…</option>
-                {tripList.map((t) => (
-                  <option key={t.trip_id} value={t.trip_id}>{tripLabel(t)}</option>
-                ))}
-              </select>
-            )}
-            {selectedTrip && (
-              <span className="text-xs text-gray-500">
-                {selectedTrip.point_count} GPS points · {stopRows.length} stops
-              </span>
-            )}
-          </div>
-        )}
-
-        {error && (
-          <p className="text-xs text-red-400">{error}</p>
-        )}
+        {error && <p className="text-xs text-red-400">{error}</p>}
       </div>
 
       {/* ── Body: map + stop sidebar ──────────────────────────────────────── */}
@@ -502,28 +513,35 @@ export default function PlaybackPageClient() {
 
         {/* Map */}
         <div className="flex-1 relative">
-          {loadingTrip && (
+          {isLoading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-950/60">
               <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
             </div>
           )}
-          {!selectedTripId && !loadingTrip && (
+          {noRoutes && !isLoading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center">
-              <p className="text-gray-600 text-sm">
-                {!activeRouteId ? 'Select a route in the filter panel' : 'Select a trip above'}
-              </p>
+              <p className="text-gray-600 text-sm">Select a route in the filter panel</p>
             </div>
           )}
+          {!noRoutes && noTrips && !isLoading && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center">
+              <p className="text-gray-600 text-sm">Select trips in the filter panel</p>
+            </div>
+          )}
+
           <PlaybackMap
-            points={pathPoints}
-            currentIdx={currentIdx}
-            stops={stopRows}
-            routeColor={routeColor(selectedRoute)}
+            tracks={trackStates.map((s, i) => ({
+              points:     s.pathPoints,
+              currentIdx: currentIdxByTrack[i] ?? -1,
+              stops:      s.stopRows,
+              color:      SLOT_COLORS[i],
+            }))}
             congestionHexes={currentCongestionHexes}
             showTraffic={showTraffic}
           />
-          {/* Traffic toggle — floating over map corner, always visible when trip loaded */}
-          {pathPoints.length > 0 && (
+
+          {/* Traffic toggle */}
+          {hasAnyData && (
             <button
               onClick={() => congestionByBucket.size > 0 && setShowTraffic((v) => !v)}
               title={congestionByBucket.size === 0 ? 'No traffic data — run notebook 47 for this date' : undefined}
@@ -548,32 +566,30 @@ export default function PlaybackPageClient() {
           )}
         </div>
 
-        {/* Stop list sidebar */}
-        {stopRows.length > 0 && (
+        {/* Stop list sidebar — single-route mode only */}
+        {!multiRoute && primaryStops.length > 0 && (
           <div className="w-72 border-l border-gray-800 flex flex-col overflow-hidden bg-gray-950">
             <div className="px-3 py-2 border-b border-gray-800 flex-shrink-0">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                {selectedTrip
-                  ? `${dirLabel(selectedTrip.direction_id) || 'Trip'} — ${selectedTrip.trip_headsign ?? ''}`
-                  : 'Stops'}
-              </p>
-              {vehicles.length > 0 && (
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Stops</p>
+              {primaryVehicles.length > 0 && (
                 <p
                   className="text-xs text-gray-600 mt-0.5"
-                  title={vehicles.length > 1 ? `Vehicle handoff detected — ${vehicles.map((v) => `#${v.vehicle_id} (${v.ping_count} pings)`).join(', ')}` : undefined}
+                  title={primaryVehicles.length > 1
+                    ? `Vehicle handoff — ${primaryVehicles.map((v) => `#${v.vehicle_id} (${v.ping_count} pings)`).join(', ')}`
+                    : undefined}
                 >
-                  {vehicles.length > 1 ? (
+                  {primaryVehicles.length > 1 ? (
                     <span className="text-amber-600">
-                      Vehicles {vehicles.map((v) => `#${v.vehicle_id}`).join(' → ')}
+                      Vehicles {primaryVehicles.map((v) => `#${v.vehicle_id}`).join(' → ')}
                     </span>
                   ) : (
-                    `Vehicle #${vehicles[0].vehicle_id}`
+                    `Vehicle #${primaryVehicles[0].vehicle_id}`
                   )}
                 </p>
               )}
             </div>
             <div className="overflow-y-auto flex-1 min-h-0">
-              {stopRows.map((s, i) => {
+              {primaryStops.map((s, i) => {
                 const isCurrent = i === currentStopIdx
                 const isPast    = s.actual_arrival_ts_ms !== null && s.actual_arrival_ts_ms <= playbackMs
                 return (
@@ -586,10 +602,7 @@ export default function PlaybackPageClient() {
                       !isPast && !isCurrent && 'opacity-50',
                     )}
                   >
-                    {/* Sequence number */}
                     <span className="text-xs text-gray-600 w-5 shrink-0 pt-0.5 text-right">{i + 1}</span>
-
-                    {/* OTP dot */}
                     <span
                       className="w-2 h-2 rounded-full shrink-0 mt-1"
                       style={{ background: s.arrival_delay_seconds != null
@@ -599,7 +612,6 @@ export default function PlaybackPageClient() {
                           : '#ef4444')
                         : '#6b7280' }}
                     />
-
                     <div className="flex-1 min-w-0">
                       <p className={cn('text-xs font-medium truncate', isCurrent ? 'text-white' : 'text-gray-300')}>
                         {s.stop_name ?? s.stop_id}
@@ -639,7 +651,7 @@ export default function PlaybackPageClient() {
         {/* Play / Pause */}
         <button
           onClick={togglePlay}
-          disabled={pathPoints.length === 0}
+          disabled={!hasAnyData}
           className="w-9 h-9 rounded-full bg-violet-600 hover:bg-violet-500 disabled:bg-gray-700 disabled:cursor-not-allowed flex items-center justify-center transition-colors flex-shrink-0"
           aria-label={isPlaying ? 'Pause' : 'Play'}
         >
@@ -648,13 +660,13 @@ export default function PlaybackPageClient() {
 
         {/* Time display */}
         <span className="text-xs text-gray-400 font-mono shrink-0 w-28">
-          {pathPoints.length > 0 ? currentTs : '—'}
+          {hasAnyData ? currentTs : '—'}
         </span>
 
         {/* Scrubber */}
         <div className="flex-1 flex items-center gap-2">
           <span className="text-xs text-gray-600 font-mono shrink-0">
-            {pathPoints.length > 0 ? fmtDuration(elapsedMs) : '0:00'}
+            {hasAnyData ? fmtDuration(elapsedMs) : '0:00'}
           </span>
           <input
             type="range"
@@ -663,11 +675,11 @@ export default function PlaybackPageClient() {
             value={playbackMs}
             step={1000}
             onChange={handleScrub}
-            disabled={pathPoints.length === 0}
+            disabled={!hasAnyData}
             className="flex-1 accent-violet-500 disabled:opacity-30 disabled:cursor-not-allowed"
           />
           <span className="text-xs text-gray-600 font-mono shrink-0">
-            {pathPoints.length > 0 ? fmtDuration(totalMs) : '0:00'}
+            {hasAnyData ? fmtDuration(totalMs) : '0:00'}
           </span>
         </div>
 
