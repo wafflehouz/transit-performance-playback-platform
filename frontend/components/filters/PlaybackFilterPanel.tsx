@@ -52,9 +52,8 @@ function fmtPhoenixShort(ms: number): string {
 function tripLabel(t: TripListRow): string {
   const ts   = t.first_timepoint_scheduled_ts ?? t.first_stop_scheduled_ts ?? t.first_ts
   const time = fmtPhoenixShort(dbToMs(ts))
-  const dir  = t.direction_id === 0 ? 'OB' : t.direction_id === 1 ? 'IB' : null
   const head = t.trip_headsign ? `To ${t.trip_headsign}` : ''
-  return [time, dir, head].filter(Boolean).join(' · ')
+  return [time, head].filter(Boolean).join(' · ')
 }
 
 const MAX_TRACKS = 3
