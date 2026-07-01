@@ -4,10 +4,10 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useFilterPanel } from '@/lib/filter-panel-context'
 import { useNav } from '@/lib/nav-context'
-import PlaybackMap, { type PlaybackPoint, type PlaybackStop } from '@/components/map/PlaybackMap'
+import PlaybackMap, { type PlaybackPoint, type PlaybackStop, type RouteShapeData } from '@/components/map/PlaybackMap'
 import PlaybackFilterPanel from '@/components/filters/PlaybackFilterPanel'
 import type { TripListRow } from '@/components/filters/PlaybackFilterPanel'
-import { playbackTripListSql, playbackPathSql, playbackStopsSql, playbackVehiclesSql, trafficCongestionSql } from '@/lib/queries/playback'
+import { playbackTripListSql, playbackWindowTripsSql, playbackPathSql, playbackStopsSql, playbackVehiclesSql, trafficCongestionSql, routeShapeSql } from '@/lib/queries/playback'
 import { ROUTES_WITH_DATA_SQL } from '@/lib/queries/otp'
 import type { DimRoute, CongestionHex } from '@/types'
 import { cn } from '@/lib/utils'
@@ -88,16 +88,20 @@ interface StopRow extends PlaybackStop {
   dwell_seconds: number | null
 }
 
-// User selections per track slot
 interface TrackConfig {
   routeId: string | null
   selectedTripId: string | null
 }
 
-// Loaded/derived data per track slot
+interface TripData {
+  tripId: string
+  headsign: string | null
+  pathPoints: PlaybackPoint[]
+}
+
 interface TrackDataState {
   tripList: TripListRow[]
-  pathPoints: PlaybackPoint[]
+  trips: TripData[]
   stopRows: StopRow[]
   vehicles: { vehicle_id: string; ping_count: number }[]
   loadingTrips: boolean
@@ -111,7 +115,7 @@ const SPEEDS = [8, 16, 32, 64] as const
 type Speed = typeof SPEEDS[number]
 
 function emptyData(): TrackDataState {
-  return { tripList: [], pathPoints: [], stopRows: [], vehicles: [], loadingTrips: false, loadingTrip: false }
+  return { tripList: [], trips: [], stopRows: [], vehicles: [], loadingTrips: false, loadingTrip: false }
 }
 
 async function fetchJson(sql: string, params: Record<string, string> = {}): Promise<any[]> {
@@ -140,12 +144,20 @@ export default function PlaybackPageClient() {
   const timeBucketParam = useRef(searchParams.get('timeBucket'))
 
   const [serviceDate, setServiceDate] = useState(() => initDate ?? todayMinus1())
+  const [mode, setMode] = useState<'trip' | 'window'>('trip')
 
-  // Track configurations (user selections) — separate from loaded data
   const [configs, setConfigs] = useState<TrackConfig[]>([
     { routeId: initRouteId, selectedTripId: null },
   ])
   const [trackStates, setTrackStates] = useState<TrackDataState[]>([emptyData()])
+
+  const [windowStart, setWindowStart] = useState('07:00')
+  const [windowEnd,   setWindowEnd]   = useState('09:00')
+
+  const [selectedTripId, setSelectedTripId] = useState<string | null>(null)
+
+  // GTFS route shape geometry per slot — fetched once per routeId, shown in window mode
+  const [routeShapesBySlot, setRouteShapesBySlot] = useState<([number, number][][] | null)[]>([null])
 
   const [routes,        setRoutes]        = useState<DimRoute[]>([])
   const [routesLoading, setRoutesLoading] = useState(true)
@@ -163,34 +175,104 @@ export default function PlaybackPageClient() {
   const speedRef      = useRef<Speed>(8)
   const endMsRef      = useRef(0)
   const rafRef        = useRef<number | null>(null)
+  const didMountRef   = useRef(false)
 
   useEffect(() => { isPlayingRef.current  = isPlaying  }, [isPlaying])
   useEffect(() => { playbackMsRef.current = playbackMs }, [playbackMs])
   useEffect(() => { speedRef.current      = speed      }, [speed])
 
-  // Derived flags
-  const hasAnyData = trackStates.some((s) => s.pathPoints.length > 0)
-  const multiRoute  = trackStates.filter((s) => s.pathPoints.length > 0).length > 1
+  // ── Derived ────────────────────────────────────────────────────────────────
+  const hasAnyData = trackStates.some((s) => s.trips.some((t) => t.pathPoints.length > 0))
+  const multiRoute = trackStates.filter((s) => s.trips.some((t) => t.pathPoints.length > 0)).length > 1
 
   const startMs = useMemo(() => {
-    const firsts = trackStates.filter((s) => s.pathPoints.length > 0).map((s) => s.pathPoints[0].tsMs)
+    const firsts = trackStates.flatMap((s) =>
+      s.trips.filter((t) => t.pathPoints.length > 0).map((t) => t.pathPoints[0].tsMs),
+    )
     return firsts.length > 0 ? Math.min(...firsts) : 0
   }, [trackStates])
 
   const endMs = useMemo(() => {
-    const lasts = trackStates.filter((s) => s.pathPoints.length > 0).map((s) => s.pathPoints.at(-1)!.tsMs)
+    const lasts = trackStates.flatMap((s) =>
+      s.trips.filter((t) => t.pathPoints.length > 0).map((t) => t.pathPoints.at(-1)!.tsMs),
+    )
     return lasts.length > 0 ? Math.max(...lasts) : 0
   }, [trackStates])
 
-  useEffect(() => { endMsRef.current = endMs }, [endMs])
+  // In window mode the scrubber is clamped to the selected window, not the raw
+  // data bounds. Trips loaded by the overlap query can start before / end after
+  // the window, so startMs/endMs would misalign with what the user selected.
+  const windowStartMs = useMemo(() => {
+    if (mode !== 'window' || !windowStart) return 0
+    const [h, m] = windowStart.split(':').map(Number)
+    const d = new Date(`${serviceDate}T00:00:00Z`)
+    d.setUTCHours(h + 7, m, 0, 0) // Phoenix UTC-7 → UTC
+    return d.getTime()
+  }, [mode, windowStart, serviceDate])
 
-  // Per-track current point index (binary search on shared clock)
-  const currentIdxByTrack = useMemo(
-    () => trackStates.map((s) => binarySearch(s.pathPoints, playbackMs)),
+  const windowEndMs = useMemo(() => {
+    if (mode !== 'window' || !windowEnd) return 0
+    const [h, m] = windowEnd.split(':').map(Number)
+    const d = new Date(`${serviceDate}T00:00:00Z`)
+    d.setUTCHours(h + 7, m, 0, 0)
+    return d.getTime()
+  }, [mode, windowEnd, serviceDate])
+
+  const scrubMin = mode === 'window' && windowStartMs > 0 ? windowStartMs : startMs
+  const scrubMax = mode === 'window' && windowEndMs   > 0 ? windowEndMs   : endMs
+
+  useEffect(() => { endMsRef.current = scrubMax }, [scrubMax])
+
+  // Auto-disable traffic overlay when a second route is added — congestion hexes
+  // are derived from the primary route only, so showing them over multiple routes misleads.
+  useEffect(() => {
+    if (configs.length > 1) setShowTraffic(false)
+  }, [configs.length])
+
+  // Map data — one TrackData per slot, each slot has N trips with tripId
+  const trackDataForMap = useMemo(
+    () => trackStates.map((s, i) => ({
+      trips: s.trips.map((t) => ({
+        points:     t.pathPoints,
+        currentIdx: binarySearch(t.pathPoints, playbackMs),
+        tripId:     t.tripId,
+      })),
+      stops: s.stopRows,
+      color: SLOT_COLORS[i],
+    })),
     [trackStates, playbackMs],
   )
 
-  // Current stop index for single-route stop sidebar
+  // Route shape data for window mode — one RouteShapeData per slot, null in trip mode
+  const routeShapesForMap = useMemo<(RouteShapeData | null)[]>(
+    () => configs.map((_, i) => {
+      const lines = routeShapesBySlot[i]
+      if (!lines || mode !== 'window') return null
+      return { lineStrings: lines, color: SLOT_COLORS[i] }
+    }),
+    [routeShapesBySlot, mode, configs],
+  )
+
+  // Vehicle info card — derived from selectedTripId
+  const selectedVehicleInfo = useMemo(() => {
+    if (!selectedTripId) return null
+    for (let i = 0; i < trackStates.length; i++) {
+      const trip = trackStates[i].trips.find((t) => t.tripId === selectedTripId)
+      if (!trip) continue
+      const idx = binarySearch(trip.pathPoints, playbackMs)
+      const pt  = idx >= 0 ? trip.pathPoints[idx] : null
+      return {
+        tripId:    selectedTripId,
+        routeName: routes.find((r) => r.route_id === configs[i].routeId)?.route_short_name ?? '',
+        headsign:  trip.headsign,
+        color:     SLOT_COLORS[i],
+        speedMph:  pt?.speed != null ? Math.round(pt.speed * 2.237) : null,
+      }
+    }
+    return null
+  }, [selectedTripId, trackStates, playbackMs, routes, configs])
+
+  // Stop sidebar (trip mode, single route only)
   const primaryStops = trackStates[0]?.stopRows ?? []
   const currentStopIdx = useMemo(() => {
     let last = -1
@@ -201,14 +283,13 @@ export default function PlaybackPageClient() {
     return last
   }, [primaryStops, playbackMs])
 
-  // Current 15-min congestion bucket (keyed to primary route corridor)
   const currentCongestionHexes = useMemo<CongestionHex[]>(() => {
     if (congestionByBucket.size === 0) return []
     const bucketMs = Math.floor(playbackMs / 900_000) * 900_000
     return congestionByBucket.get(bucketMs) ?? []
   }, [congestionByBucket, playbackMs])
 
-  // Nav context — reflect primary route
+  // Nav context
   useEffect(() => {
     setNavFilter({
       scope:         configs[0]?.routeId ? 'single' : null,
@@ -226,9 +307,46 @@ export default function PlaybackPageClient() {
       .finally(() => setRoutesLoading(false))
   }, [])
 
-  // ── Load trip lists when route selections or date change ──────────────────
+  // ── Clear all data when mode changes (skip initial mount) ─────────────────
+  useEffect(() => {
+    if (!didMountRef.current) { didMountRef.current = true; return }
+    setTrackStates((prev) => prev.map(() => emptyData()))
+    setConfigs((prev) => prev.map((c) => ({ ...c, selectedTripId: null })))
+    setSelectedTripId(null)
+    setIsPlaying(false)
+  }, [mode])
+
+  // ── Fetch GTFS route shape geometry whenever routes change ────────────────
+  // Shapes are static (date-independent) — fetch once per routeId.
   const routeIdsKey = configs.map((c) => c.routeId ?? '').join('|')
   useEffect(() => {
+    let cancelled = false
+    // Grow/shrink the slot array to match configs
+    setRouteShapesBySlot(configs.map(() => null))
+    configs.forEach((c, i) => {
+      if (!c.routeId) return
+      fetchJson(routeShapeSql(c.routeId))
+        .then((rows: any[]) => {
+          if (cancelled) return
+          // Group rows by shape_id → each shape_id is one LineString (direction)
+          const byShape = new Map<string, [number, number][]>()
+          for (const r of rows) {
+            if (r.lon == null || r.lat == null) continue
+            const key = String(r.shape_id)
+            if (!byShape.has(key)) byShape.set(key, [])
+            byShape.get(key)!.push([Number(r.lon), Number(r.lat)])
+          }
+          const lineStrings = [...byShape.values()].filter((c) => c.length >= 2)
+          setRouteShapesBySlot((prev) => prev.map((v, j) => j === i ? lineStrings : v))
+        })
+        .catch(() => {})
+    })
+    return () => { cancelled = true }
+  }, [routeIdsKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Trip mode: load trip lists when route or date changes ─────────────────
+  useEffect(() => {
+    if (mode !== 'trip') return
     let cancelled = false
     setTrackStates(configs.map((c) => ({ ...emptyData(), loadingTrips: !!c.routeId })))
     setIsPlaying(false)
@@ -253,9 +371,9 @@ export default function PlaybackPageClient() {
     })
 
     return () => { cancelled = true }
-  }, [routeIdsKey, serviceDate]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [routeIdsKey, serviceDate, mode]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Auto-select trip for primary track from deep-link timeBucket ──────────
+  // ── Trip mode: auto-select from deep-link timeBucket ─────────────────────
   useEffect(() => {
     const tb       = timeBucketParam.current
     const tripList = trackStates[0]?.tripList ?? []
@@ -269,16 +387,17 @@ export default function PlaybackPageClient() {
     setConfigs((prev) => prev.map((c, i) => i === 0 ? { ...c, selectedTripId: best.trip_id } : c))
   }, [trackStates]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Load path + stops when trip selections change ─────────────────────────
+  // ── Trip mode: load path + stops when trip selection changes ──────────────
   const tripIdsKey = configs.map((c) => c.selectedTripId ?? '').join('|')
   useEffect(() => {
+    if (mode !== 'trip') return
     let cancelled = false
     setTrackStates((prev) =>
       prev.map((s, i) => ({
         ...s,
-        pathPoints: [],
-        stopRows:   [],
-        vehicles:   [],
+        trips:       [],
+        stopRows:    [],
+        vehicles:    [],
         loadingTrip: !!configs[i]?.selectedTripId,
       })),
     )
@@ -287,7 +406,9 @@ export default function PlaybackPageClient() {
 
     configs.forEach((c, i) => {
       if (!c.selectedTripId) return
-      const params = { serviceDate }
+      const tripInfo = trackStates[i]?.tripList.find((t) => t.trip_id === c.selectedTripId)
+      const headsign = tripInfo?.trip_headsign ?? null
+      const params   = { serviceDate }
       Promise.all([
         fetchJson(playbackPathSql(c.selectedTripId), params),
         fetchJson(playbackStopsSql(c.selectedTripId), params),
@@ -295,13 +416,15 @@ export default function PlaybackPageClient() {
       ])
         .then(([pathRows, sRows, vRows]) => {
           if (cancelled) return
-          const pts: PlaybackPoint[] = pathRows.map((r: any) => ({
-            tsMs:    dbToMs(r.point_ts),
-            lat:     Number(r.lat),
-            lon:     Number(r.lon),
-            bearing: r.bearing   != null ? Number(r.bearing)   : null,
-            speed:   r.speed_mps != null ? Number(r.speed_mps) : null,
-          }))
+          const pts: PlaybackPoint[] = pathRows
+            .filter((r: any) => r.lat != null && r.lon != null && (Number(r.lat) !== 0 || Number(r.lon) !== 0))
+            .map((r: any) => ({
+              tsMs:    dbToMs(r.point_ts),
+              lat:     Number(r.lat),
+              lon:     Number(r.lon),
+              bearing: r.bearing   != null ? Number(r.bearing)   : null,
+              speed:   r.speed_mps != null ? Number(r.speed_mps) : null,
+            }))
           const stops: StopRow[] = sRows.map((r: any) => ({
             stop_id:               r.stop_id,
             stop_name:             r.stop_name ?? null,
@@ -322,11 +445,10 @@ export default function PlaybackPageClient() {
 
           setTrackStates((prev) =>
             prev.map((s, j) => j === i
-              ? { ...s, pathPoints: pts, stopRows: stops, vehicles, loadingTrip: false }
+              ? { ...s, trips: [{ tripId: c.selectedTripId!, headsign, pathPoints: pts }], stopRows: stops, vehicles, loadingTrip: false }
               : s),
           )
 
-          // Position scrubber at start of first loaded trip
           if (pts.length > 0 && i === 0) {
             const ms = pts[0].tsMs
             playbackMsRef.current = ms
@@ -345,10 +467,88 @@ export default function PlaybackPageClient() {
     return () => { cancelled = true }
   }, [tripIdsKey, serviceDate]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Load congestion for primary route corridor ────────────────────────────
-  const primaryPathPoints = trackStates[0]?.pathPoints ?? []
+  // ── Window mode: load all matching trips when routes/date/window changes ──
+  const windowLoadKey = `${routeIdsKey}|${serviceDate}|${windowStart}|${windowEnd}`
   useEffect(() => {
-    if (primaryPathPoints.length === 0) { setCongestionByBucket(new Map()); return }
+    if (mode !== 'window') return
+    if (!windowStart || !windowEnd) return
+    if (!configs.some((c) => c.routeId)) return
+
+    let cancelled = false
+    setTrackStates((prev) =>
+      prev.map((s, i) => ({ ...emptyData(), loadingTrips: !!configs[i]?.routeId })),
+    )
+    setSelectedTripId(null)
+    setIsPlaying(false)
+    setError(null)
+
+    configs.forEach((c, i) => {
+      if (!c.routeId) return
+      fetchJson(playbackWindowTripsSql(c.routeId), { serviceDate, windowStart, windowEnd })
+        .then((tripRows) => {
+          if (cancelled) return
+          setTrackStates((prev) =>
+            prev.map((s, j) => j === i
+              ? { ...s, loadingTrips: false, loadingTrip: tripRows.length > 0 }
+              : s),
+          )
+          if (tripRows.length === 0) return
+
+          Promise.all(
+            tripRows.map((row: any) =>
+              fetchJson(playbackPathSql(row.trip_id), { serviceDate }).then((pathRows): TripData => ({
+                tripId:     row.trip_id,
+                headsign:   row.trip_headsign ?? null,
+                pathPoints: pathRows
+                  .filter((r: any) => r.lat != null && r.lon != null && (Number(r.lat) !== 0 || Number(r.lon) !== 0))
+                  .map((r: any) => ({
+                    tsMs:    dbToMs(r.point_ts),
+                    lat:     Number(r.lat),
+                    lon:     Number(r.lon),
+                    bearing: r.bearing   != null ? Number(r.bearing)   : null,
+                    speed:   r.speed_mps != null ? Number(r.speed_mps) : null,
+                  })),
+              })),
+            ),
+          ).then((loadedTrips) => {
+            if (cancelled) return
+            setTrackStates((prev) =>
+              prev.map((s, j) => j === i ? { ...s, trips: loadedTrips, loadingTrip: false } : s),
+            )
+            if (i === 0 && loadedTrips.some((t) => t.pathPoints.length > 0)) {
+              // Align scrubber to the window start, not the first data point
+              // (trips overlap the window so their data starts before windowStart)
+              const [wh, wm] = windowStart.split(':').map(Number)
+              const d = new Date(`${serviceDate}T00:00:00Z`)
+              d.setUTCHours(wh + 7, wm, 0, 0)
+              const wStartMs = d.getTime()
+              playbackMsRef.current = wStartMs
+              setPlaybackMs(wStartMs)
+            }
+          })
+        })
+        .catch((e) => {
+          if (cancelled) return
+          setError(e.message)
+          setTrackStates((prev) =>
+            prev.map((s, j) => j === i ? { ...s, loadingTrips: false, loadingTrip: false } : s),
+          )
+        })
+    })
+
+    return () => { cancelled = true }
+  }, [windowLoadKey, mode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Load congestion for primary route corridor ────────────────────────────
+  const primaryPathPoints = useMemo(
+    () => trackStates[0]?.trips[0]?.pathPoints ?? [],
+    [trackStates],
+  )
+  useEffect(() => {
+    if (primaryPathPoints.length === 0) {
+      setCongestionByBucket((prev) => prev.size > 0 ? new Map() : prev)
+      return
+    }
     import('h3-js').then(({ latLngToCell }) => {
       const h3Set = new Set(primaryPathPoints.map((p) => latLngToCell(p.lat, p.lon, 9)))
       const sql   = trafficCongestionSql([...h3Set])
@@ -436,12 +636,16 @@ export default function PlaybackPageClient() {
     setConfigs((prev) => prev.map((c, i) => i === idx ? { ...c, selectedTripId: tripId } : c))
   }
 
+  function handleVehicleClick(tripId: string) {
+    setSelectedTripId((prev) => prev === tripId ? null : tripId)
+  }
+
   // ── Play/pause ─────────────────────────────────────────────────────────────
   function togglePlay() {
     if (!hasAnyData) return
     if (!isPlaying && playbackMs >= endMsRef.current) {
-      playbackMsRef.current = startMs
-      setPlaybackMs(startMs)
+      playbackMsRef.current = scrubMin
+      setPlaybackMs(scrubMin)
     }
     setIsPlaying((p) => !p)
   }
@@ -456,17 +660,23 @@ export default function PlaybackPageClient() {
   useEffect(() => {
     setContentRef.current(
       <PlaybackFilterPanel
+        mode={mode}
+        onModeChange={setMode}
         tracks={configs.map((c, i) => ({
           routeId:        c.routeId,
           selectedTripId: c.selectedTripId,
           tripList:       trackStates[i]?.tripList    ?? [],
           loadingTrips:   trackStates[i]?.loadingTrips ?? false,
+          tripCount:      trackStates[i]?.trips.length ?? 0,
           color:          SLOT_COLORS[i],
         }))}
         routes={routes}
         routesLoading={routesLoading}
         serviceDate={serviceDate}
+        windowStart={windowStart}
+        windowEnd={windowEnd}
         onServiceDateChange={setServiceDate}
+        onWindowChange={(start, end) => { setWindowStart(start); setWindowEnd(end) }}
         onRouteChange={handleRouteChange}
         onTripChange={handleTripChange}
         onAddTrack={handleAddTrack}
@@ -474,7 +684,7 @@ export default function PlaybackPageClient() {
       />,
     )
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configs, trackStates, routes, routesLoading, serviceDate])
+  }, [configs, trackStates, routes, routesLoading, serviceDate, windowStart, windowEnd, mode])
 
   // ── Computed display values ────────────────────────────────────────────────
   const headerTitle = configs
@@ -483,13 +693,17 @@ export default function PlaybackPageClient() {
     .filter(Boolean)
     .join(' + ')
 
-  const isLoading       = trackStates.some((s) => s.loadingTrip)
+  const isLoading       = trackStates.some((s) => s.loadingTrip || s.loadingTrips)
   const noRoutes        = configs.every((c) => !c.routeId)
-  const noTrips         = configs.every((c) => !c.selectedTripId)
+  const noTrips         = trackStates.every((s) => s.trips.length === 0)
   const currentTs       = hasAnyData ? fmtPhoenix(playbackMs) : '—'
-  const elapsedMs       = playbackMs - startMs
-  const totalMs         = endMs - startMs
+  const elapsedMs       = playbackMs - scrubMin
+  const totalMs         = scrubMax - scrubMin
   const primaryVehicles = trackStates[0]?.vehicles ?? []
+
+  const windowTripTotal = mode === 'window'
+    ? trackStates.reduce((sum, s) => sum + s.trips.length, 0)
+    : 0
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -501,9 +715,14 @@ export default function PlaybackPageClient() {
           <h1 className="text-xl font-semibold text-white">Trip Playback</h1>
           <p className="text-sm text-gray-400 mt-0.5">
             {headerTitle
-              ? `Route${headerTitle.includes('+') ? 's' : ''} ${headerTitle} · ${serviceDate}`
+              ? mode === 'window' && windowStart && windowEnd
+                ? `Route${headerTitle.includes('+') ? 's' : ''} ${headerTitle} · ${serviceDate} · ${windowStart}–${windowEnd}`
+                : `Route${headerTitle.includes('+') ? 's' : ''} ${headerTitle} · ${serviceDate}`
               : 'Select a route in the filter panel to begin'}
           </p>
+          {mode === 'window' && hasAnyData && (
+            <p className="text-xs text-gray-600 mt-0.5">{windowTripTotal} active vehicle{windowTripTotal !== 1 ? 's' : ''}</p>
+          )}
         </div>
         {error && <p className="text-xs text-red-400">{error}</p>}
       </div>
@@ -525,20 +744,51 @@ export default function PlaybackPageClient() {
           )}
           {!noRoutes && noTrips && !isLoading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center">
-              <p className="text-gray-600 text-sm">Select trips in the filter panel</p>
+              <p className="text-gray-600 text-sm">
+                {mode === 'window' ? 'Set a time window in the filter panel' : 'Select a trip in the filter panel'}
+              </p>
             </div>
           )}
 
           <PlaybackMap
-            tracks={trackStates.map((s, i) => ({
-              points:     s.pathPoints,
-              currentIdx: currentIdxByTrack[i] ?? -1,
-              stops:      s.stopRows,
-              color:      SLOT_COLORS[i],
-            }))}
+            tracks={trackDataForMap}
             congestionHexes={currentCongestionHexes}
             showTraffic={showTraffic}
+            showTripPaths={mode === 'trip'}
+            routeShapes={routeShapesForMap}
+            selectedTripId={selectedTripId}
+            onVehicleClick={handleVehicleClick}
           />
+
+          {/* Vehicle info card */}
+          {selectedVehicleInfo && (
+            <div className="absolute top-3 left-3 z-10 bg-gray-900/95 border border-gray-700 rounded-lg p-3 min-w-44 max-w-56 shadow-xl">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: selectedVehicleInfo.color }} />
+                  <span className="text-xs font-semibold text-white truncate">
+                    Route {selectedVehicleInfo.routeName}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setSelectedTripId(null)}
+                  className="text-gray-600 hover:text-gray-300 text-xs shrink-0 leading-none"
+                  aria-label="Dismiss"
+                >
+                  ✕
+                </button>
+              </div>
+              {selectedVehicleInfo.headsign && (
+                <p className="text-xs text-gray-400 mt-1.5 truncate">To {selectedVehicleInfo.headsign}</p>
+              )}
+              {selectedVehicleInfo.speedMph !== null && (
+                <p className="text-xs text-gray-500 mt-0.5">{selectedVehicleInfo.speedMph} mph</p>
+              )}
+              <p className="text-xs text-gray-700 mt-1 font-mono truncate" title={selectedVehicleInfo.tripId}>
+                {selectedVehicleInfo.tripId}
+              </p>
+            </div>
+          )}
 
           {/* Traffic toggle */}
           {hasAnyData && (
@@ -566,8 +816,8 @@ export default function PlaybackPageClient() {
           )}
         </div>
 
-        {/* Stop list sidebar — single-route mode only */}
-        {!multiRoute && primaryStops.length > 0 && (
+        {/* Stop list sidebar — trip mode, single route only */}
+        {mode === 'trip' && !multiRoute && primaryStops.length > 0 && (
           <div className="w-72 border-l border-gray-800 flex flex-col overflow-hidden bg-gray-950">
             <div className="px-3 py-2 border-b border-gray-800 flex-shrink-0">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Stops</p>
@@ -648,7 +898,6 @@ export default function PlaybackPageClient() {
       {/* ── Playback controls ─────────────────────────────────────────────── */}
       <div className="h-16 border-t border-gray-800 bg-gray-900 flex items-center px-4 gap-4 flex-shrink-0">
 
-        {/* Play / Pause */}
         <button
           onClick={togglePlay}
           disabled={!hasAnyData}
@@ -658,20 +907,20 @@ export default function PlaybackPageClient() {
           {isPlaying ? <PauseIcon /> : <PlayIcon />}
         </button>
 
-        {/* Time display */}
         <span className="text-xs text-gray-400 font-mono shrink-0 w-28">
           {hasAnyData ? currentTs : '—'}
         </span>
 
-        {/* Scrubber */}
         <div className="flex-1 flex items-center gap-2">
           <span className="text-xs text-gray-600 font-mono shrink-0">
-            {hasAnyData ? fmtDuration(elapsedMs) : '0:00'}
+            {hasAnyData
+              ? mode === 'window' ? fmtPhoenix(scrubMin, false) : fmtDuration(elapsedMs)
+              : '0:00'}
           </span>
           <input
             type="range"
-            min={startMs}
-            max={endMs || startMs + 1}
+            min={scrubMin}
+            max={scrubMax || scrubMin + 1}
             value={playbackMs}
             step={1000}
             onChange={handleScrub}
@@ -679,11 +928,12 @@ export default function PlaybackPageClient() {
             className="flex-1 accent-violet-500 disabled:opacity-30 disabled:cursor-not-allowed"
           />
           <span className="text-xs text-gray-600 font-mono shrink-0">
-            {hasAnyData ? fmtDuration(totalMs) : '0:00'}
+            {hasAnyData
+              ? mode === 'window' ? fmtPhoenix(scrubMax, false) : fmtDuration(totalMs)
+              : '0:00'}
           </span>
         </div>
 
-        {/* Speed selector */}
         <div className="flex rounded-lg overflow-hidden border border-gray-700 text-xs flex-shrink-0">
           {SPEEDS.map((s) => (
             <button

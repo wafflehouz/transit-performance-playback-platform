@@ -86,6 +86,54 @@ export function trafficCongestionSql(h3Indices: string[]) {
   `
 }
 
+// All trips on a route that are active (overlapping) within a Phoenix local time window.
+// windowStart / windowEnd are HH:MM strings in Phoenix time (UTC-7, no DST).
+// Trips are included if their VP path overlaps [windowStart, windowEnd] even partially.
+export function playbackWindowTripsSql(routeId: string) {
+  const id = routeId.replace(/'/g, "''")
+  return `
+    WITH trip_bounds AS (
+      SELECT
+        p.trip_id,
+        t.direction_id,
+        t.trip_headsign,
+        MIN(p.point_ts)                                                          AS first_ts,
+        MAX(p.point_ts)                                                          AS last_ts,
+        MIN(f.scheduled_arrival_ts)                                              AS first_stop_scheduled_ts,
+        MIN(CASE WHEN ss.timepoint = 1 THEN f.scheduled_arrival_ts END)         AS first_timepoint_scheduled_ts
+      FROM gold_trip_path_fact p
+      INNER JOIN silver_dim_trip t ON p.trip_id = t.trip_id AND t.route_id = '${id}'
+      LEFT JOIN gold_stop_dwell_fact f
+        ON f.trip_id = p.trip_id AND f.service_date = p.service_date
+      LEFT JOIN silver_fact_stop_schedule ss
+        ON ss.trip_id = f.trip_id AND ss.stop_sequence = f.stop_sequence
+      WHERE p.service_date = :serviceDate
+      GROUP BY p.trip_id, t.direction_id, t.trip_headsign
+    )
+    SELECT *
+    FROM trip_bounds
+    WHERE first_ts <= (strptime(:serviceDate || ' ' || :windowEnd,   '%Y-%m-%d %H:%M') + INTERVAL '7' HOUR)
+      AND last_ts  >= (strptime(:serviceDate || ' ' || :windowStart, '%Y-%m-%d %H:%M') + INTERVAL '7' HOUR)
+    ORDER BY COALESCE(first_timepoint_scheduled_ts, first_stop_scheduled_ts), first_ts
+  `
+}
+
+// GTFS route shape geometry — all shapes (directions) for a route, ordered for LineString rendering
+export function routeShapeSql(routeId: string) {
+  const id = routeId.replace(/'/g, "''")
+  return `
+    WITH ids AS (
+      SELECT DISTINCT shape_id
+      FROM silver_dim_trip
+      WHERE route_id = '${id}' AND shape_id IS NOT NULL
+    )
+    SELECT sp.shape_id, sp.shape_pt_lon AS lon, sp.shape_pt_lat AS lat
+    FROM silver_fact_shape_points sp
+    INNER JOIN ids ON ids.shape_id = sp.shape_id
+    ORDER BY sp.shape_id, sp.shape_pt_sequence
+  `
+}
+
 // Stop-level schedule vs actual for a specific trip — for OTP coloring and stop list
 export function playbackStopsSql(tripId: string) {
   const id = tripId.replace(/'/g, "''")

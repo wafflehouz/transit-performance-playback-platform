@@ -29,16 +29,25 @@ export interface PlaybackStop {
 }
 
 export interface TrackData {
-  points: PlaybackPoint[]
-  currentIdx: number   // index into points; -1 = before start
+  trips: { points: PlaybackPoint[]; currentIdx: number; tripId: string }[]
   stops: PlaybackStop[]
   color: string
 }
 
+// One entry per route slot; each element is an array of coordinate rings (one per shape_id / direction)
+export interface RouteShapeData {
+  lineStrings: [number, number][][]
+  color: string
+}
+
 interface Props {
-  tracks: TrackData[]          // up to 3
+  tracks: TrackData[]
   congestionHexes: CongestionHex[]
   showTraffic: boolean
+  showTripPaths?: boolean         // false → suppress per-trip breadcrumb trails (window mode)
+  routeShapes?: (RouteShapeData | null)[]
+  selectedTripId?: string | null
+  onVehicleClick?: (tripId: string) => void
 }
 
 const MAPTILER_KEY = process.env.NEXT_PUBLIC_MAPTILER_KEY!
@@ -55,10 +64,14 @@ function stopOtpColor(delay: number | null, pickupType: number): string {
 
 type GeoSource = { setData: (d: unknown) => void } | undefined
 
-export default function PlaybackMap({ tracks, congestionHexes, showTraffic }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const mapRef       = useRef<MaplibreMap | null>(null)
+export default function PlaybackMap({ tracks, congestionHexes, showTraffic, showTripPaths = true, routeShapes = [], selectedTripId, onVehicleClick }: Props) {
+  const containerRef      = useRef<HTMLDivElement>(null)
+  const mapRef            = useRef<MaplibreMap | null>(null)
+  const onVehicleClickRef = useRef(onVehicleClick)
+  const animFrameRef      = useRef<number | null>(null)
   const [mapReady, setMapReady] = useState(false)
+
+  useEffect(() => { onVehicleClickRef.current = onVehicleClick }, [onVehicleClick])
 
   // ── Init map once ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -78,13 +91,15 @@ export default function PlaybackMap({ tracks, congestionHexes, showTraffic }: Pr
       map.addControl(new ml.AttributionControl({ compact: true }), 'bottom-left')
 
       map.on('load', () => {
-        // Shared sources (traffic, stops, vehicle)
-        for (const id of ['traffic', 'stops', 'vehicle'] as const) {
-          map.addSource(id, { type: 'geojson', data: EMPTY_FC })
-        }
+        // Shared sources
+        map.addSource('traffic', { type: 'geojson', data: EMPTY_FC })
+        map.addSource('stops',   { type: 'geojson', data: EMPTY_FC })
+        // Vehicle source — clustering groups nearby buses into a count badge
+        map.addSource('vehicle', { type: 'geojson', data: EMPTY_FC })
 
-        // Per-slot path sources — always register all 3 slots
+        // Per-slot route shape + path sources — always register all 3 slots
         for (let n = 0; n < MAX_TRACKS; n++) {
+          map.addSource(`route-shape-${n}`, { type: 'geojson', data: EMPTY_FC })
           map.addSource(`path-past-${n}`,   { type: 'geojson', data: EMPTY_FC })
           map.addSource(`path-future-${n}`, { type: 'geojson', data: EMPTY_FC })
         }
@@ -103,7 +118,22 @@ export default function PlaybackMap({ tracks, congestionHexes, showTraffic }: Pr
           paint: { 'line-color': ['get', 'color'], 'line-width': 0.8, 'line-opacity': 0.6 },
         })
 
-        // Per-slot path layers
+        // Per-slot route shape layers — static GTFS corridor, rendered below trip paths
+        for (let n = 0; n < MAX_TRACKS; n++) {
+          map.addLayer({
+            id: `route-shape-line-${n}`,
+            type: 'line',
+            source: `route-shape-${n}`,
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+              'line-color': '#38bdf8',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 9, 3, 13, 5],
+              'line-opacity': 0.45,
+            },
+          })
+        }
+
+        // Per-slot trip breadcrumb path layers
         for (let n = 0; n < MAX_TRACKS; n++) {
           map.addLayer({
             id: `path-future-line-${n}`,
@@ -227,12 +257,79 @@ export default function PlaybackMap({ tracks, congestionHexes, showTraffic }: Pr
           },
         })
 
+        // Vehicle click — pointer cursor + callback with tripId
+        map.on('mouseenter', 'veh-circle', () => { map.getCanvas().style.cursor = 'pointer' })
+        map.on('mouseleave', 'veh-circle', () => { map.getCanvas().style.cursor = ''        })
+        map.on('click', 'veh-circle', (e) => {
+          const tripId = e.features?.[0]?.properties?.tripId as string | undefined
+          if (tripId) onVehicleClickRef.current?.(tripId)
+        })
+
+        // ── Selected vehicle — pulse ring + brightened circle + inset ring ────
+        map.addSource('selected-vehicle', { type: 'geojson', data: EMPTY_FC })
+
+        // Expanding pulse ring — sits behind the main circle so it radiates outward
+        map.addLayer({
+          id: 'veh-selected-pulse',
+          type: 'circle',
+          source: 'selected-vehicle',
+          paint: {
+            'circle-radius': 12,
+            'circle-color': 'transparent',
+            'circle-opacity': 0,
+            'circle-stroke-width': 2,
+            'circle-stroke-color': ['get', 'color'],
+            'circle-stroke-opacity': 0,
+          },
+        }, 'veh-circle')
+
+        map.addLayer({
+          id: 'veh-selected-circle',
+          type: 'circle',
+          source: 'selected-vehicle',
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 9, 12, 13, 15, 17],
+            'circle-color': ['get', 'color'],
+            'circle-opacity': 1.0,
+          },
+        }, 'veh-bearing')
+
+        map.addLayer({
+          id: 'veh-selected-ring',
+          type: 'circle',
+          source: 'selected-vehicle',
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 7, 12, 11, 15, 15],
+            'circle-color': 'transparent',
+            'circle-opacity': 0,
+            'circle-stroke-width': 2,
+            'circle-stroke-color': 'rgba(255,255,255,0.9)',
+            'circle-stroke-opacity': 1,
+          },
+        }, 'veh-bearing')
+
+        // rAF pulse loop — runs continuously, only visible when selected-vehicle has a feature
+        const PULSE_DURATION = 1800
+        const pulseEpoch = performance.now()
+        function animatePulse() {
+          const t = ((performance.now() - pulseEpoch) % PULSE_DURATION) / PULSE_DURATION
+          const zoom = map.getZoom()
+          const baseR = Math.max(9, Math.min(17, 9 + ((zoom - 9) / 6) * 8))
+          map.setPaintProperty('veh-selected-pulse', 'circle-radius', baseR + t * 18)
+          map.setPaintProperty('veh-selected-pulse', 'circle-stroke-opacity', 0.7 * (1 - t) * (1 - t))
+          animFrameRef.current = requestAnimationFrame(animatePulse)
+        }
+        animFrameRef.current = requestAnimationFrame(animatePulse)
+
         mapRef.current = map
         setMapReady(true)
       })
     })
 
-    return () => { map?.remove() }
+    return () => {
+      if (animFrameRef.current != null) cancelAnimationFrame(animFrameRef.current)
+      map?.remove()
+    }
   }, [])
 
   // ── Route colors per slot ─────────────────────────────────────────────────
@@ -240,17 +337,40 @@ export default function PlaybackMap({ tracks, congestionHexes, showTraffic }: Pr
     if (!mapReady || !mapRef.current) return
     for (let n = 0; n < MAX_TRACKS; n++) {
       const color = tracks[n]?.color ?? '#38bdf8'
-      mapRef.current.setPaintProperty(`path-past-line-${n}`, 'line-color', color)
+      mapRef.current.setPaintProperty(`path-past-line-${n}`,   'line-color', color)
+      mapRef.current.setPaintProperty(`route-shape-line-${n}`, 'line-color', color)
     }
   }, [mapReady, tracks])
+
+  // ── Route shape geometry (window mode static GTFS corridor) ──────────────
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    for (let n = 0; n < MAX_TRACKS; n++) {
+      const shapeData = routeShapes[n]
+      const source    = mapRef.current.getSource(`route-shape-${n}`) as GeoSource
+      if (!shapeData || shapeData.lineStrings.length === 0) {
+        source?.setData(EMPTY_FC)
+      } else {
+        source?.setData({
+          type: 'FeatureCollection',
+          features: shapeData.lineStrings.map((coords) => ({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: coords },
+            properties: {},
+          })),
+        })
+      }
+    }
+  }, [mapReady, routeShapes])
 
   // ── Fit bounds when path data loads or changes ───────────────────────────
   // Keyed on point counts per slot (stable string) — avoids re-fitting on
   // every 60fps render caused by the tracks prop being recreated each frame.
-  const pointCountKey = tracks.map((t) => t.points.length).join(',')
+  const pointCountKey = tracks.map((t) => t.trips.map((tr) => tr.points.length).join('-')).join(',')
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
-    const allPoints = tracks.flatMap((t) => t.points)
+    const allPoints = tracks.flatMap((t) => t.trips.flatMap((tr) => tr.points))
+      .filter((p) => p.lat !== 0 || p.lon !== 0)
     if (allPoints.length === 0) return
     import('maplibre-gl').then((ml) => {
       const lngs = allPoints.map((p) => p.lon)
@@ -269,41 +389,57 @@ export default function PlaybackMap({ tracks, congestionHexes, showTraffic }: Pr
     const map = mapRef.current
 
     const vehicleFeatures: unknown[] = []
+    let selectedFeature: unknown = null
 
     for (let n = 0; n < MAX_TRACKS; n++) {
       const track = tracks[n]
 
-      if (!track || track.points.length === 0) {
+      if (!track || track.trips.length === 0 || track.trips.every((tr) => tr.points.length === 0)) {
         ;(map.getSource(`path-past-${n}`)   as GeoSource)?.setData(EMPTY_FC)
         ;(map.getSource(`path-future-${n}`) as GeoSource)?.setData(EMPTY_FC)
         continue
       }
 
-      const { points, currentIdx, color } = track
-      const idx         = currentIdx < 0 ? 0 : currentIdx
-      const pastCoords   = points.slice(0, idx + 1).map((p) => [p.lon, p.lat])
-      const futureCoords = points.slice(idx).map((p) => [p.lon, p.lat])
+      // Window mode: suppress per-trip GPS trails — vehicle dots only, route shape shown separately
+      if (!showTripPaths) {
+        ;(map.getSource(`path-past-${n}`)   as GeoSource)?.setData(EMPTY_FC)
+        ;(map.getSource(`path-future-${n}`) as GeoSource)?.setData(EMPTY_FC)
+      }
 
-      ;(map.getSource(`path-past-${n}`) as GeoSource)?.setData({
-        type: 'FeatureCollection',
-        features: pastCoords.length >= 2
-          ? [{ type: 'Feature', geometry: { type: 'LineString', coordinates: pastCoords }, properties: {} }]
-          : [],
-      })
-      ;(map.getSource(`path-future-${n}`) as GeoSource)?.setData({
-        type: 'FeatureCollection',
-        features: futureCoords.length >= 2
-          ? [{ type: 'Feature', geometry: { type: 'LineString', coordinates: futureCoords }, properties: {} }]
-          : [],
-      })
+      const { trips, color } = track
+      const pastFeatures:   unknown[] = []
+      const futureFeatures: unknown[] = []
 
-      if (currentIdx >= 0 && currentIdx < points.length) {
-        const pt = points[currentIdx]
-        vehicleFeatures.push({
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: [pt.lon, pt.lat] },
-          properties: { bearing: pt.bearing, color },
-        })
+      for (const { points, currentIdx, tripId } of trips) {
+        const idx          = currentIdx < 0 ? 0 : currentIdx
+        const pastCoords   = points.slice(0, idx + 1).map((p) => [p.lon, p.lat])
+        const futureCoords = points.slice(idx).map((p) => [p.lon, p.lat])
+        if (showTripPaths) {
+          if (pastCoords.length >= 2)
+            pastFeatures.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: pastCoords }, properties: {} })
+          if (futureCoords.length >= 2)
+            futureFeatures.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: futureCoords }, properties: {} })
+        }
+        if (currentIdx >= 0 && currentIdx < points.length) {
+          const pt = points[currentIdx]
+          vehicleFeatures.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [pt.lon, pt.lat] },
+            properties: { bearing: pt.bearing, color, tripId },
+          })
+          if (tripId === selectedTripId) {
+            selectedFeature = {
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates: [pt.lon, pt.lat] },
+              properties: { color, bearing: pt.bearing },
+            }
+          }
+        }
+      }
+
+      if (showTripPaths) {
+        ;(map.getSource(`path-past-${n}`)   as GeoSource)?.setData({ type: 'FeatureCollection', features: pastFeatures })
+        ;(map.getSource(`path-future-${n}`) as GeoSource)?.setData({ type: 'FeatureCollection', features: futureFeatures })
       }
     }
 
@@ -311,12 +447,16 @@ export default function PlaybackMap({ tracks, congestionHexes, showTraffic }: Pr
       type: 'FeatureCollection',
       features: vehicleFeatures,
     })
-  }, [mapReady, tracks])
+    ;(map.getSource('selected-vehicle') as GeoSource)?.setData({
+      type: 'FeatureCollection',
+      features: selectedFeature ? [selectedFeature] : [],
+    })
+  }, [mapReady, tracks, showTripPaths, selectedTripId])
 
   // ── Stop markers — flatten all tracks ────────────────────────────────────
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
-    const features = tracks.flatMap(({ stops, color }) =>
+    const features = tracks.flatMap(({ stops }) =>
       stops
         .filter((s) => s.lat != null && s.lon != null)
         .map((s) => ({
