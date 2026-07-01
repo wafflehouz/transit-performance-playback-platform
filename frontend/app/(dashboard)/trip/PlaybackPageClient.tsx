@@ -97,6 +97,7 @@ interface TripData {
   tripId: string
   headsign: string | null
   pathPoints: PlaybackPoint[]
+  vehicleId: string | null
 }
 
 interface TrackDataState {
@@ -267,6 +268,7 @@ export default function PlaybackPageClient() {
         headsign:  trip.headsign,
         color:     SLOT_COLORS[i],
         speedMph:  pt?.speed != null ? Math.round(pt.speed * 2.237) : null,
+        vehicleId: trip.vehicleId ?? trackStates[i].vehicles[0]?.vehicle_id ?? null,
       }
     }
     return null
@@ -445,7 +447,7 @@ export default function PlaybackPageClient() {
 
           setTrackStates((prev) =>
             prev.map((s, j) => j === i
-              ? { ...s, trips: [{ tripId: c.selectedTripId!, headsign, pathPoints: pts }], stopRows: stops, vehicles, loadingTrip: false }
+              ? { ...s, trips: [{ tripId: c.selectedTripId!, headsign, vehicleId: null, pathPoints: pts }], stopRows: stops, vehicles, loadingTrip: false }
               : s),
           )
 
@@ -499,6 +501,7 @@ export default function PlaybackPageClient() {
               fetchJson(playbackPathSql(row.trip_id), { serviceDate }).then((pathRows): TripData => ({
                 tripId:     row.trip_id,
                 headsign:   row.trip_headsign ?? null,
+                vehicleId:  row.vehicle_id    ?? null,
                 pathPoints: pathRows
                   .filter((r: any) => r.lat != null && r.lon != null && (Number(r.lat) !== 0 || Number(r.lon) !== 0))
                   .map((r: any) => ({
@@ -780,6 +783,9 @@ export default function PlaybackPageClient() {
               </div>
               {selectedVehicleInfo.headsign && (
                 <p className="text-xs text-gray-400 mt-1.5 truncate">To {selectedVehicleInfo.headsign}</p>
+              )}
+              {selectedVehicleInfo.vehicleId && (
+                <p className="text-xs text-gray-400 mt-0.5">Vehicle #{selectedVehicleInfo.vehicleId}</p>
               )}
               {selectedVehicleInfo.speedMph !== null && (
                 <p className="text-xs text-gray-500 mt-0.5">{selectedVehicleInfo.speedMph} mph</p>

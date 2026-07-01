@@ -110,8 +110,18 @@ export function playbackWindowTripsSql(routeId: string) {
       WHERE p.service_date = :serviceDate
       GROUP BY p.trip_id, t.direction_id, t.trip_headsign
     )
-    SELECT *
-    FROM trip_bounds
+    SELECT tb.*,
+      (
+        SELECT vehicle_id
+        FROM silver_fact_vehicle_positions
+        WHERE service_date = :serviceDate
+          AND trip_id      = tb.trip_id
+          AND vehicle_id IS NOT NULL
+        GROUP BY vehicle_id
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+      ) AS vehicle_id
+    FROM trip_bounds tb
     WHERE first_ts <= (strptime(:serviceDate || ' ' || :windowEnd,   '%Y-%m-%d %H:%M') + INTERVAL '7' HOUR)
       AND last_ts  >= (strptime(:serviceDate || ' ' || :windowStart, '%Y-%m-%d %H:%M') + INTERVAL '7' HOUR)
     ORDER BY COALESCE(first_timepoint_scheduled_ts, first_stop_scheduled_ts), first_ts
