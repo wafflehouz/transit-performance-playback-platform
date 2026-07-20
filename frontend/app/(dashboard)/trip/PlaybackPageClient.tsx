@@ -10,14 +10,12 @@ import type { TripListRow } from '@/components/filters/PlaybackFilterPanel'
 import { playbackTripListSql, playbackWindowTripsSql, playbackPathSql, playbackStopsSql, playbackVehiclesSql, trafficCongestionSql, routeShapeSql } from '@/lib/queries/playback'
 import { ROUTES_WITH_DATA_SQL } from '@/lib/queries/otp'
 import type { DimRoute, CongestionHex } from '@/types'
-import { cn } from '@/lib/utils'
+import { cn, getDataAnchorDate, toYMD } from '@/lib/utils'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function todayMinus1(): string {
-  const d = new Date()
-  d.setDate(d.getDate() - 1)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return toYMD(getDataAnchorDate())
 }
 
 function dbToMs(ts: string): number {

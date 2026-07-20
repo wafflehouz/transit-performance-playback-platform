@@ -24,7 +24,7 @@ import {
   schedulePivotSql, topDelayedYesterdaySql,
   missedTripsSummarySql, missedTripsListSql, scheduleMissedSql,
 } from '@/lib/queries/otp'
-import { cn } from '@/lib/utils'
+import { cn, getDataAnchorDate, toYMD } from '@/lib/utils'
 
 // ── OTP colors (Swiftly / Databricks palette) ─────────────────────────────────
 const OTP_COLORS = { early: '#e57373', onTime: '#4db6ac', late: '#ffb74d' }
@@ -125,11 +125,7 @@ export default function OtpPageClient() {
   const [histData, setHistData] = useState<any[]>([])
   const [headsigns, setHeadsigns] = useState<Record<number, string>>({})
   const [excludeTerminals, setExcludeTerminals] = useState(() => searchParams.get('excludeTerminals') === 'true')
-  const [scheduleDate, setScheduleDate] = useState(() => {
-    const d = new Date()
-    d.setDate(d.getDate() - 1)
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  })
+  const [scheduleDate, setScheduleDate] = useState(() => toYMD(getDataAnchorDate()))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -256,9 +252,7 @@ export default function OtpPageClient() {
       }
       setHeadsigns(hsMap)
     } else {
-      const yesterday = new Date()
-      yesterday.setDate(yesterday.getDate() - 1)
-      const yd = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`
+      const yd = toYMD(getDataAnchorDate())
 
       const grpName = f.mode === 'group' ? f.groupName : null
       const [summary, trend, routeRows, topDelayed, missedSum, missedRows] = await Promise.all([

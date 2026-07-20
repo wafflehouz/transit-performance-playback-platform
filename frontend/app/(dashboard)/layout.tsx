@@ -6,6 +6,7 @@ import { NavProvider } from '@/lib/nav-context'
 import IconNav from '@/components/ui/IconNav'
 import FilterPanel from '@/components/ui/FilterPanel'
 import MethodologyPanel from '@/components/ui/MethodologyPanel'
+import PipelineNotice from '@/components/ui/PipelineNotice'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -17,11 +18,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
     <NavProvider>
       <FilterPanelProvider>
         <MethodologyPanelProvider>
-          <div className="flex h-screen bg-gray-950 text-white overflow-hidden">
-            <IconNav user={user} />
-            <FilterPanel />
-            <main className="flex-1 overflow-hidden min-w-0 flex flex-col">{children}</main>
-            <MethodologyPanel />
+          <div className="flex flex-col h-screen bg-gray-950 text-white overflow-hidden">
+            <PipelineNotice />
+            <div className="flex flex-1 min-h-0 overflow-hidden">
+              <IconNav user={user} />
+              <FilterPanel />
+              <main className="flex-1 overflow-hidden min-w-0 flex flex-col">{children}</main>
+              <MethodologyPanel />
+            </div>
           </div>
         </MethodologyPanelProvider>
       </FilterPanelProvider>

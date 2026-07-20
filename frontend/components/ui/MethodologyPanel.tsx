@@ -153,17 +153,28 @@ export default function MethodologyPanel() {
         {/* Data Freshness */}
         <section ref={(el) => { sectionRefs.current.pipeline = el }}>
           <SectionHeading>Data Freshness</SectionHeading>
-          <div className="space-y-2 mb-3">
-            <FreshnessRow label="GTFS static schedules" value="Refreshed daily · 1:00 AM" />
-            <FreshnessRow label="Real-time feed (VP + TripUpdates)" value="Polled hourly" />
-            <FreshnessRow label="Bronze → Silver processing" value="Nightly · 2:30 AM" />
-            <FreshnessRow label="Gold tables (OTP, Dwell, Grid, Anomaly)" value="Nightly · 4:00 AM" />
-          </div>
-          <Note>
-            All historical dashboard views (OTP, Dwell, Route Grid) reflect the previous night&apos;s
-            pipeline run. The Live map shows the current state of the vehicle position feed,
-            updated each hourly poll cycle.
-          </Note>
+          {process.env.NEXT_PUBLIC_DATA_END_DATE ? (
+            <Note>
+              <strong className="text-amber-400">Pipeline paused</strong> — the ingestion pollers are
+              stopped (compute cost), so the schedule below is not currently running. Historical
+              dashboards (OTP, Dwell, Route Grid, Trip Playback) are frozen at the last completed run.
+              The Live map is unaffected and keeps polling in real time.
+            </Note>
+          ) : (
+            <>
+              <div className="space-y-2 mb-3">
+                <FreshnessRow label="GTFS static schedules" value="Refreshed daily · 1:00 AM" />
+                <FreshnessRow label="Real-time feed (VP + TripUpdates)" value="Polled hourly" />
+                <FreshnessRow label="Bronze → Silver processing" value="Nightly · 2:30 AM" />
+                <FreshnessRow label="Gold tables (OTP, Dwell, Grid, Anomaly)" value="Nightly · 4:00 AM" />
+              </div>
+              <Note>
+                All historical dashboard views (OTP, Dwell, Route Grid) reflect the previous night&apos;s
+                pipeline run. The Live map shows the current state of the vehicle position feed,
+                updated each hourly poll cycle.
+              </Note>
+            </>
+          )}
         </section>
 
         {/* Bottom padding */}

@@ -37,3 +37,21 @@ export function formatDelay(seconds: number): string {
   const s = abs % 60
   return s > 0 ? `${sign}${m}m ${s}s` : `${sign}${m}m`
 }
+
+/** Local-date YMD string — avoids toISOString()'s UTC rollover at 5 PM Phoenix */
+export function toYMD(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * The "last complete service day" dashboards should default to. Normally that's
+ * yesterday in local time, but NEXT_PUBLIC_DATA_END_DATE pins it to a fixed date —
+ * used while the ingestion pollers are paused so every date picker/preset keeps
+ * defaulting to the last real pipeline run instead of an empty "yesterday".
+ */
+export function getDataAnchorDate(): Date {
+  const anchor = process.env.NEXT_PUBLIC_DATA_END_DATE
+  const d = anchor ? new Date(anchor + 'T12:00:00') : new Date()
+  if (!anchor) d.setDate(d.getDate() - 1)
+  return d
+}

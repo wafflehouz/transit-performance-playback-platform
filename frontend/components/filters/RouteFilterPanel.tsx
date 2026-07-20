@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { cn } from '@/lib/utils'
+import { cn, getDataAnchorDate, toYMD } from '@/lib/utils'
 import { FilterSection, DirectionFilter } from '@/components/ui/FilterControls'
 import type { DimRoute } from '@/types'
 
@@ -20,17 +20,8 @@ export interface OtpFilterState {
 // Preset date ranges (relative to yesterday, since gold runs nightly)
 export type DatePreset = '1d' | '7d' | '14d' | '28d'
 
-function toYMD(d: Date): string {
-  // Use local date components — toISOString() is UTC and rolls over at 5 PM Phoenix
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 export function resolveDates(preset: DatePreset): { startDate: string; endDate: string } {
-  // When running against a static snapshot, NEXT_PUBLIC_DATA_END_DATE pins the
-  // anchor so presets count back from the last date that has data rather than yesterday.
-  const anchor = process.env.NEXT_PUBLIC_DATA_END_DATE
-  const end = anchor ? new Date(anchor + 'T12:00:00') : new Date()
-  if (!anchor) end.setDate(end.getDate() - 1) // yesterday in local time
+  const end = getDataAnchorDate()
   const start = new Date(end)
   const days = preset === '1d' ? 0 : preset === '7d' ? 6 : preset === '14d' ? 13 : 27
   start.setDate(start.getDate() - days)

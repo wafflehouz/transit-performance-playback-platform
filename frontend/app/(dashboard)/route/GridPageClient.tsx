@@ -11,11 +11,10 @@ import {
 } from '@/components/ui/FilterControls'
 import RouteGrid from '@/components/grid/RouteGrid'
 import type { RouteMetrics15Min, DimRoute } from '@/types'
+import { getDataAnchorDate, toYMD } from '@/lib/utils'
 
 function defaultDate(): string {
-  const d = new Date()
-  d.setDate(d.getDate() - 1)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return toYMD(getDataAnchorDate())
 }
 
 export default function GridPageClient() {
