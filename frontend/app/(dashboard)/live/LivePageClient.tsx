@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { Loader2, AlertTriangle } from 'lucide-react'
 import { useFilterPanel } from '@/lib/filter-panel-context'
 import { useNav } from '@/lib/nav-context'
 import { FilterSection } from '@/components/ui/FilterControls'
@@ -11,6 +12,10 @@ import { cn } from '@/lib/utils'
 
 const RENDER_API = process.env.NEXT_PUBLIC_RENDER_API_URL ?? 'http://localhost:3001'
 const REFRESH_MS = 30_000
+// Render's free tier spins down the API when idle — first request after that can
+// take up to ~a minute, so we switch to a "waking up" message past this threshold
+// instead of leaving users staring at what looks like a hung page.
+const SLOW_LOAD_MS = 4_000
 
 type LiveScope = 'group' | 'single'
 
@@ -106,7 +111,10 @@ export default function LivePageClient() {
   // ── Feed ──────────────────────────────────────────────────────────────────
   const [feed, setFeed]   = useState<FeedResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [feedLoading, setFeedLoading] = useState(false)
+  const [feedSlow, setFeedSlow]       = useState(false)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const slowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ── Route stops: shapes (group/single) + stop dots (single only) ──────────
   const [shapePoints, setShapePoints] = useState<Array<RouteStop & { route_id?: string }>>([])
@@ -324,8 +332,9 @@ export default function LivePageClient() {
 
   // ── Fetch vehicles ────────────────────────────────────────────────────────
   const fetchVehicles = useCallback(async (_scope: LiveScope, ids: string[]) => {
+    if (!ids.length) return
+    setFeedLoading(true)
     try {
-      if (!ids.length) return
       const url = `${RENDER_API}/vehicles/multi?route_ids=${ids.join(',')}`
       const res = await fetch(url)
       if (!res.ok) throw new Error(`Feed error: ${res.status}`)
@@ -334,6 +343,8 @@ export default function LivePageClient() {
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Feed unavailable')
+    } finally {
+      setFeedLoading(false)
     }
   }, [])
 
@@ -341,12 +352,25 @@ export default function LivePageClient() {
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current)
     setFeed(null)
+    setError(null)
     setSelectedVehicleId(null)
     if (!activeRouteIds.length) return
     fetchVehicles(scope, activeRouteIds)
     timerRef.current = setInterval(() => fetchVehicles(scope, activeRouteIds), REFRESH_MS)
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [scope, activeRouteIds, fetchVehicles])
+
+  // Flip to "waking up" messaging once the initial load has taken a while —
+  // only relevant before the first successful fetch for the current selection.
+  useEffect(() => {
+    if (feedLoading && !feed) {
+      slowTimerRef.current = setTimeout(() => setFeedSlow(true), SLOW_LOAD_MS)
+    } else {
+      if (slowTimerRef.current) clearTimeout(slowTimerRef.current)
+      setFeedSlow(false)
+    }
+    return () => { if (slowTimerRef.current) clearTimeout(slowTimerRef.current) }
+  }, [feedLoading, feed])
 
   // ── Trip start time for selected vehicle ──────────────────────────────────
   useEffect(() => {
@@ -466,6 +490,40 @@ export default function LivePageClient() {
               {scope === 'group' ? 'Select a route group to begin' : 'Select a route to begin'}
             </p>
             <p className="text-gray-400 text-sm">Use the Filters panel on the left</p>
+          </div>
+        </div>
+      )}
+
+      {/* Loading / feed-unavailable state — selection made, no data yet */}
+      {!needsSelection && !feed && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center">
+          <div className="bg-gray-900/90 border border-gray-700 rounded-2xl px-8 py-6 text-center backdrop-blur-sm shadow-2xl max-w-sm">
+            {error ? (
+              <>
+                <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-3">
+                  <AlertTriangle className="w-6 h-6 text-red-400" />
+                </div>
+                <p className="text-white font-semibold mb-1">Live feed unavailable</p>
+                <p className="text-gray-400 text-sm mb-3">{error}</p>
+                <button
+                  onClick={() => fetchVehicles(scope, activeRouteIds)}
+                  className="text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
+                >
+                  Retry now
+                </button>
+              </>
+            ) : (
+              <>
+                <Loader2 className="w-8 h-8 text-blue-400 animate-spin mx-auto mb-3" />
+                <p className="text-white font-semibold mb-1">Loading live vehicle positions…</p>
+                {feedSlow && (
+                  <p className="text-gray-400 text-sm mt-1">
+                    Still waking up the live feed — the hosting server spins down when
+                    idle and can take up to a minute to respond.
+                  </p>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}
