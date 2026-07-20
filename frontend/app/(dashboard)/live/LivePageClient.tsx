@@ -12,9 +12,9 @@ import { cn } from '@/lib/utils'
 
 const RENDER_API = process.env.NEXT_PUBLIC_RENDER_API_URL ?? 'http://localhost:3001'
 const REFRESH_MS = 30_000
-// Render's free tier spins down the API when idle — first request after that can
-// take up to ~a minute, so we switch to a "waking up" message past this threshold
-// instead of leaving users staring at what looks like a hung page.
+// The vehicle-position API can take a few extra seconds to respond after a lull,
+// so we switch to a "waking up" message past this threshold instead of leaving
+// users staring at what looks like a hung page.
 const SLOW_LOAD_MS = 4_000
 
 type LiveScope = 'group' | 'single'
@@ -518,8 +518,8 @@ export default function LivePageClient() {
                 <p className="text-white font-semibold mb-1">Loading live vehicle positions…</p>
                 {feedSlow && (
                   <p className="text-gray-400 text-sm mt-1">
-                    Still waking up the live feed — the hosting server spins down when
-                    idle and can take up to a minute to respond.
+                    Still waking up the live feed — this can take a few seconds longer
+                    than usual.
                   </p>
                 )}
               </>
